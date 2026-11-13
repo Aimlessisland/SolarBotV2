@@ -1,6 +1,9 @@
 import os
 import glob
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
 import cv2
 import numpy as np
 import serial
@@ -13,6 +16,8 @@ OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
 SERIAL_PORT = "/dev/ttyACM1"
 BAUD_RATE = 115200
+
+serial_lock = threading.Lock()
 
 def connect_port():
     try:
@@ -463,6 +468,41 @@ def auto_drive_step_by_step(ser):
     print("==========================================\n")
 
 # ==========================================================
+# MOBILE / WEB CONTROL BRIDGE (PORT 5000)
+# ==========================================================
+def mobileControl(ser):
+    """Starts background HTTP listener on port 5000 for Node.js / Web commands."""
+    class WebCmdHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path != "/cmd":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            params = parse_qs(parsed.query)
+            cmd = params.get("c", [""])[0].strip()
+
+            if cmd:
+                print(f"\n[WEB CMD] -> {cmd}")
+                send_command(ser, cmd.upper())
+
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, format, *args):
+            pass
+
+    HTTPServer.allow_reuse_address = True
+    server = HTTPServer(("0.0.0.0", 5000), WebCmdHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    print("[WEB READY] Listening for Node.js / Web on port 5000 (/cmd?c=...)")
+    return server
+
+# ==========================================================
 # DIRECT SERIAL TERMINAL MODE
 # ==========================================================
 def direct_serial_mode(ser):
@@ -472,6 +512,8 @@ def direct_serial_mode(ser):
     print("Type 'q' to return to main menu.")
     print("==========================================")
 
+    web_server = mobileControl(ser)
+    
     while True:
         raw_cmd = input("\n[Direct Serial] > ").strip()
         if not raw_cmd:
