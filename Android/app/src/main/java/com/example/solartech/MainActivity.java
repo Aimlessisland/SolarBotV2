@@ -1,19 +1,20 @@
 package com.example.solartech;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.text.InputType;
 import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
@@ -22,6 +23,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean pageHasError = false;
     private View splashContainer;
     private WebView webView;
+    private View progressFill;
+    private ImageView progressSunIcon;
+
     private SharedPreferences prefs;
     private static final String PREF_IP = "server_ip";
     private static final String DEFAULT_IP = "192.168.1.112";
@@ -52,6 +56,8 @@ public class MainActivity extends AppCompatActivity {
 
         splashContainer = findViewById(R.id.splashContainer);
         webView = findViewById(R.id.webView);
+        progressFill = findViewById(R.id.progressFill);
+        progressSunIcon = findViewById(R.id.progressSunIcon);
         ImageButton btnSettings = findViewById(R.id.btnSettings);
 
         if (btnSettings != null) {
@@ -93,7 +99,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            // ignore
         }
         return null;
     }
@@ -110,20 +116,45 @@ public class MainActivity extends AppCompatActivity {
         String ip = prefs.getString(PREF_IP, DEFAULT_IP);
         String url = "http://" + ip + ":3000/deviceDetail.html";
 
+        // Load URL in background
         webView.loadUrl(url);
 
-        // Check after 2.5 seconds: if webpage loaded successfully, transition to WebView.
-        // If webpage is not available (error occurred), stay on splash screen.
-        new Handler(Looper.getMainLooper()).postDelayed(() -> {
-            if (!pageHasError) {
-                if (splashContainer != null) {
-                    splashContainer.setVisibility(View.GONE);
-                }
-                if (webView != null) {
-                    webView.setVisibility(View.VISIBLE);
+        // Run smooth loading bar animation for 2 seconds then transition (if no error)
+        startProgressAnimation(2000);
+    }
+
+    private void startProgressAnimation(long durationMs) {
+        if (progressFill == null || progressSunIcon == null) return;
+
+        float maxFillWidthPx = 264 * getResources().getDisplayMetrics().density;
+
+        ValueAnimator animator = ValueAnimator.ofFloat(0f, maxFillWidthPx);
+        animator.setDuration(durationMs);
+        animator.addUpdateListener(animation -> {
+            float currentWidth = (float) animation.getAnimatedValue();
+
+            ViewGroup.LayoutParams fillParams = progressFill.getLayoutParams();
+            fillParams.width = (int) currentWidth;
+            progressFill.setLayoutParams(fillParams);
+
+            progressSunIcon.setTranslationX(currentWidth);
+        });
+
+        animator.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                if (!pageHasError) {
+                    if (splashContainer != null) {
+                        splashContainer.setVisibility(View.GONE);
+                    }
+                    if (webView != null) {
+                        webView.setVisibility(View.VISIBLE);
+                    }
                 }
             }
-        }, 2500);
+        });
+
+        animator.start();
     }
 
     private void showIpDialog() {

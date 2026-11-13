@@ -3,16 +3,30 @@
     android:height="48dp"
     android:viewportWidth="48"
     android:viewportHeight="48">
-  <!-- Outer circle / 'o' body -->
+
+  <!-- Top Antenna Knob -->
   <path
-      android:fillColor="#FFFFFF"
-      android:pathData="M24,6C14.06,6 6,14.06 6,24s8.06,18 18,18s18,-8.06 18,-18S33.94,6 24,6z M24,38c-7.73,0 -14,-6.27 -14,-14s6.27,-14 14,-14s14,6.27 14,14S31.73,38 24,38z"/>
-  <!-- Inner robot/solar head silhouette -->
+      android:fillColor="#FF7A00"
+      android:pathData="M24,2c2.21,0 4,1.79 4,4s-1.79,4 -4,4s-4,-1.79 -4,-4S21.79,2 24,2z"/>
+
+  <!-- Antenna Stem -->
   <path
-      android:fillColor="#FFFFFF"
-      android:pathData="M24,12c-4.42,0 -8,3.58 -8,8c0,1.82 0.62,3.5 1.66,4.85C19.34,25.9 21.5,27 24,27s4.66,-1.1 6.34,-2.15C31.38,23.5 32,21.82 32,20C32,15.58 28.42,12 24,12z M24,16c2.21,0 4,1.79 4,4s-1.79,4 -4,4s-4,-1.79 -4,-4S21.79,16 24,16z"/>
-  <!-- Antenna / sun ray on top -->
+      android:fillColor="#FF7A00"
+      android:pathData="M22,8h4v6h-4z"/>
+
+  <!-- Bottom Left Foot -->
   <path
-      android:fillColor="#FFFFFF"
-      android:pathData="M23,7h2v3h-2z"/>
+      android:fillColor="#FF7A00"
+      android:pathData="M16,36H6c-2.21,0 -4,1.79 -4,4s1.79,4 4,4h10c2.21,0 4,-1.79 4,-4s-1.79,-4 -4,-4z"/>
+
+  <!-- Bottom Right Foot -->
+  <path
+      android:fillColor="#FF7A00"
+      android:pathData="M32,36h-10c-2.21,0 -4,1.79 -4,4s1.79,4 4,4h10c2.21,0 4,-1.79 4,-4s-1.79,-4 -4,-4z"/>
+
+  <!-- Main Arch / Ring Body with Cutouts -->
+  <path
+      android:fillType="evenOdd"
+      android:fillColor="#FF7A00"
+      android:pathData="M24,12C13.51,12 5,20.51 5,31v10h6V31c0,-7.18 5.82,-13 13,-13s13,5.82 13,13v10h6V31C43,20.51 34.49,12 24,12z M17,23c-2.76,0 -5,2.24 -5,5s2.24,5 5,5s5,-2.24 5,-5s-2.24,-5 -5,-5z M31,23c-2.76,0 -5,2.24 -5,5s2.24,5 5,5s5,-2.24 5,-5s-2.24,-5 -5,-5z"/>
 </vector>
