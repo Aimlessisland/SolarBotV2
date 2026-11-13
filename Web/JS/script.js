@@ -36,6 +36,7 @@ function bindHoldButton(btn, cmd) {
     btn.addEventListener("pointerup", stopHold);
     btn.addEventListener("pointerleave", stopHold);
     btn.addEventListener("pointercancel", stopHold);
+    btn.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 window.addEventListener("DOMContentLoaded", () => {

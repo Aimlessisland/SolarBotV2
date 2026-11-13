@@ -182,6 +182,8 @@ body {
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    user-select: none;
+    touch-action: none;
 }
 .dpad-row .control-btn,
 .power-btn {
