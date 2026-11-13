@@ -1,0 +1,18 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+  <!-- Outer circle / 'o' body -->
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M24,6C14.06,6 6,14.06 6,24s8.06,18 18,18s18,-8.06 18,-18S33.94,6 24,6z M24,38c-7.73,0 -14,-6.27 -14,-14s6.27,-14 14,-14s14,6.27 14,14S31.73,38 24,38z"/>
+  <!-- Inner robot/solar head silhouette -->
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M24,12c-4.42,0 -8,3.58 -8,8c0,1.82 0.62,3.5 1.66,4.85C19.34,25.9 21.5,27 24,27s4.66,-1.1 6.34,-2.15C31.38,23.5 32,21.82 32,20C32,15.58 28.42,12 24,12z M24,16c2.21,0 4,1.79 4,4s-1.79,4 -4,4s-4,-1.79 -4,-4S21.79,16 24,16z"/>
+  <!-- Antenna / sun ray on top -->
+  <path
+      android:fillColor="#FFFFFF"
+      android:pathData="M23,7h2v3h-2z"/>
+</vector>
