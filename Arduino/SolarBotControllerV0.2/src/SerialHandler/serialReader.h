@@ -153,6 +153,28 @@ void cmdHandler(){
             rotateRight(targetTicks);
       }
     }
+
+    else if (response.startsWith("M7 ")){
+      int spaceIndex =  response.indexOf(' ');
+      if (spaceIndex != -1) {
+            // Extract the number after the space and convert to integer
+            int targetTicks = response.substring(spaceIndex + 1).toInt();
+          
+            // Trigger your non-blocking movement function
+            curveLeftBack(targetTicks);
+      }
+    }
+
+    else if (response.startsWith("M8 ")){
+      int spaceIndex =  response.indexOf(' ');
+      if (spaceIndex != -1) {
+            // Extract the number after the space and convert to integer
+            int targetTicks = response.substring(spaceIndex + 1).toInt();
+          
+            // Trigger your non-blocking movement function
+            curveRightBack(targetTicks);
+      }
+    }
   }
 }
 

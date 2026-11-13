@@ -107,6 +107,16 @@ void curveRight(int amount){
     moveLeftTrackForward();
 }
 
+void curveLeftBack(int amount){
+    remainingTicks = amount;
+    moveRightTrackBackward();
+}
+
+void curveRightBack(int amount){
+    remainingTicks = amount;
+    moveLeftTrackBackward();
+}
+
 void halt(){
     analogWrite(LEFT_LPWM_PIN, 0);
     analogWrite(LEFT_RPWM_PIN, 0);
