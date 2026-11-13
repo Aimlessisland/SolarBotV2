@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar MD 001 Detail</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="flex justify-center items-center min-h-screen bg-neutral-950 p-0 sm:p-4">
+
+    <div class="w-full max-w-sm h-screen sm:h-[860px] bg-black sm:rounded-[40px] sm:border-[8px] sm:border-neutral-800 flex flex-col justify-between p-5 relative overflow-hidden shadow-2xl">
+
+        <div class="flex flex-col">
+            <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center space-x-3">
+                    <img id="robot-icon" src="/ico/mainOrange.png" alt="Robot Icon" class="w-9 h-9 rounded-lg object-contain">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-1.5 h-6 bg-orange-500 rounded-full"></div>
+                        <h1 class="text-xl font-bold tracking-tight text-white">Solar MD 001</h1>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center text-xs text-neutral-400 mb-3 pl-12">
+                <span>Date: 22/09/2026</span>
+                <span class="text-neutral-300 font-medium">Connecting</span>
+            </div>
+
+            <div class="w-full h-44 bg-[#d9d9d9] rounded-2xl flex flex-col items-center justify-center relative overflow-hidden mb-3 shadow-inner">
+                <i class="fa-solid fa-spinner fa-spin text-3xl text-neutral-800 mb-2"></i>
+                <span class="text-neutral-800 text-sm font-semibold tracking-wider">Connecting</span>
+            </div>
+
+            <div class="flex justify-between items-center mb-1">
+                <div class="flex items-center space-x-2 text-sm text-neutral-200">
+                    <i class="fa-solid fa-camera text-neutral-400"></i>
+                    <span class="font-medium">Front Cam</span>
+                </div>
+                <button class="text-xs text-neutral-300 underline underline-offset-4 hover:text-orange-500 transition-colors">
+                    Switch Cam
+                </button>
+            </div>
+
+            <div class="w-full h-1 bg-orange-500 rounded-full mt-2 mb-4"></div>
+
+            <div class="flex flex-col space-y-2 text-sm text-neutral-200">
+                <h2 class="text-sm font-bold text-white mb-1">Detail</h2>
+                <div class="flex justify-between">
+                    <span class="text-neutral-400">Work Date:</span>
+                    <span class="font-medium text-white">22/09/2026</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-neutral-400">Estimate Cleaning:</span>
+                    <span class="font-medium text-white">07 Hs. 30 Min 24 Sec.</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-neutral-400">Worked Time:</span>
+                    <span class="font-medium text-white">02 Hs. 15 Min 02 Sec.</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-neutral-400">Status:</span>
+                    <span class="font-medium text-white">Paused</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex justify-end items-center space-x-3 pb-4 pr-1">
+            <!-- Sliding menu container -->
+            <div id="slideMenu" class="flex items-center space-x-3 overflow-hidden max-w-0 opacity-0 transition-all duration-300 ease-in-out">
+                <button id="homeBtn" onclick="window.location.href='addDevice.html'" class="w-14 h-14 text-white font-bold text-xs rounded-full flex items-center justify-center shadow-lg cursor-pointer border-none shrink-0 transition-colors">Home</button>
+                <button id="detailBtn" onclick="window.location.href='deviceDetail.html'" class="w-14 h-14 text-white font-bold text-xs rounded-full flex items-center justify-center shadow-lg cursor-pointer border-none shrink-0">Detail</button>
+                <button id="controlBtn" onclick="window.location.href='controllerPage.html'" class="w-14 h-14 text-white font-bold text-xs rounded-full flex items-center justify-center shadow-lg cursor-pointer border-none shrink-0">Control</button>
+            </div>
+        
+            <!-- The Menu Button -->
+            <button id="menuButton" class="w-14 h-14 bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs rounded-full flex items-center justify-center shadow-lg transition-all duration-300 shrink-0 z-10">
+                Menu
+            </button>
+        </div>
+
+        <script src="../JS/menu.js"> </script>
+
+    </div>
+
+</body>
+</html>

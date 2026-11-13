@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device</title>
+    <link rel="stylesheet" href="CSS/addDevice.css">  
+    <script src="/JS/menu.js"></script> 
+    <script src="/JS/script.js"></script> 
+</head>
+<body>
+    <div class="header-container">
+        <img src="/ico/mainOrange.png" alt="Orange Icon" class="header-icon">
+        <div class="orange-bar"></div>
+        <span class="title">Device</span>
+    </div>
+
+    <div class="device-list">
+        <!-- Existing Device Card -->
+        <a href="deviceDetail.html" class="device-card orange-card" style="text-decoration: none; color: inherit;">
+            <img src="/ico/solarBot.png" alt="Device" class="device-img">
+            <div class="device-info">
+                <span class="device-number">1st Device</span>
+                <span class="device-name">Solar MD 001</span>
+            </div>
+        </a>
+
+        <!-- Add Device Card -->
+        <div class="device-card add-card">
+            <div class="add-icon">+</div>
+            <span class="add-text">Add Device</span>
+        </div>
+    </div>
+
+    <button id="menuButton" class="menu-fab">
+        +
+    </button>
+</body>
+</html>
