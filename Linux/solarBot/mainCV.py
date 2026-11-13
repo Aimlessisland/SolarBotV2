@@ -31,29 +31,30 @@ def connect_port():
         return None
 
 # ==========================================================
-# COMMAND DISPATCHER
+# COMMAND DISPATCHER (THREAD-SAFE FOR KEYBOARD + WEB)
 # ==========================================================
 def send_command(ser, command):
     """Sends command over serial and waits for Arduino 'OK'."""
-    if ser is None:
-        print(f"\n>>> [OFFLINE] COMMAND ISSUED: {command} <<<\n")
+    with serial_lock:
+        if ser is None:
+            print(f"\n>>> [OFFLINE] COMMAND ISSUED: {command} <<<\n")
+            return False
+
+        ser.reset_input_buffer()
+        ser.write(f"{command}\n".encode("utf-8"))
+        print(f">>> SENT: {command}")
+
+        start = time.time()
+        while time.time() - start < 3.0:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode("utf-8", errors="ignore").strip()
+                if line:
+                    print(f"<<< ARDUINO: {line}")
+                if line.upper() == "OK":
+                    return True
+
+        print("[TIMEOUT] No 'OK' received from Arduino.")
         return False
-
-    ser.reset_input_buffer()
-    ser.write(f"{command}\n".encode("utf-8"))
-    print(f">>> SENT: {command}")
-
-    start = time.time()
-    while time.time() - start < 3.0:
-        if ser.in_waiting > 0:
-            line = ser.readline().decode("utf-8", errors="ignore").strip()
-            if line:
-                print(f"<<< ARDUINO: {line}")
-            if line.upper() == "OK":
-                return True
-
-    print("[TIMEOUT] No 'OK' received from Arduino.")
-    return False
 
 # ==========================================================
 # CURVE FITTING HELPER
@@ -503,7 +504,7 @@ def mobileControl(ser):
     return server
 
 # ==========================================================
-# DIRECT SERIAL TERMINAL MODE
+# DIRECT SERIAL TERMINAL MODE ('t' MODE + WEB)
 # ==========================================================
 def direct_serial_mode(ser):
     print("\n==========================================")
@@ -513,12 +514,14 @@ def direct_serial_mode(ser):
     print("==========================================")
 
     web_server = mobileControl(ser)
-    
+
     while True:
         raw_cmd = input("\n[Direct Serial] > ").strip()
         if not raw_cmd:
             continue
         if raw_cmd.lower() == 'q':
+            web_server.shutdown()
+            web_server.server_close()
             print("Exiting Direct Terminal Mode.")
             break
 
