@@ -1,10 +1,11 @@
 const API_URL = `http://${window.location.hostname}:5000/cmd`;
-let activeHoldCmd = null;
+let pressedCmd = null;
 
 async function sendOnce(cmd) {
     try {
         const res = await fetch(`${API_URL}?c=${encodeURIComponent(cmd)}`);
-        return res.ok;
+        const reply = (await res.text()).trim();
+        return res.ok && reply === "OK";
     } catch (e) {
         return false;
     }
@@ -14,28 +15,28 @@ function bindHoldButton(btn, cmd) {
     if (!btn) return;
     btn.style.touchAction = "none";
 
-    const startHold = async (e) => {
+    btn.addEventListener("pointerdown", async (e) => {
         e.preventDefault();
-        if (activeHoldCmd === cmd) return;
-        activeHoldCmd = cmd;
+        if (pressedCmd === cmd) return;
+        pressedCmd = cmd;
 
-        while (activeHoldCmd === cmd) {
+        // Loop only while this button is still pressed AND previous pulse returned OK
+        while (pressedCmd === cmd) {
             const gotOk = await sendOnce(cmd);
             if (!gotOk) break;
         }
-    };
+    });
 
-    const stopHold = () => {
-        if (activeHoldCmd === cmd) {
-            activeHoldCmd = null;
-            sendOnce("M0 0");
+    // Clear flag on release so the loop stops naturally on the next check
+    const release = () => {
+        if (pressedCmd === cmd) {
+            pressedCmd = null;
         }
     };
 
-    btn.addEventListener("pointerdown", startHold);
-    btn.addEventListener("pointerup", stopHold);
-    btn.addEventListener("pointerleave", stopHold);
-    btn.addEventListener("pointercancel", stopHold);
+    btn.addEventListener("pointerup", release);
+    btn.addEventListener("pointerleave", release);
+    btn.addEventListener("pointercancel", release);
     btn.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
@@ -55,7 +56,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const powerBtn = document.querySelector(".power-btn");
     if (powerBtn) {
         powerBtn.addEventListener("click", () => {
-            activeHoldCmd = null;
+            pressedCmd = null;
             sendOnce("M0 0");
         });
     }
@@ -64,7 +65,7 @@ window.addEventListener("DOMContentLoaded", () => {
     let isRunning = false;
     if (wideBtn) {
         wideBtn.addEventListener("click", () => {
-            activeHoldCmd = null;
+            pressedCmd = null;
             isRunning = !isRunning;
             sendOnce(isRunning ? "M20 100" : "M0 0");
         });
