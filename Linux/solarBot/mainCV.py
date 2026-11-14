@@ -386,7 +386,7 @@ def outputImage(traced_image, image_path):
 def decide_movement(telem):
     DEADZONE = 4.0
     STOP_EDGE_CM = 10.0
-    STEP_DURATION = 100
+    STEP_DURATION = 200
 
     left_lean = telem["left_lean"]
     right_lean = telem["right_lean"]
