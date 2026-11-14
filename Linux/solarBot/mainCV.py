@@ -552,7 +552,7 @@ def main_loop():
             if traced_img is not None:
                 outputImage(traced_img, img_path)
                 decision, _ = decide_movement(telem)
-                send_command(ser, decision)
+                #send_command(ser, decision)
         elif cmd == 'a':
             auto_drive_step_by_step(ser)
         elif cmd == 't':
