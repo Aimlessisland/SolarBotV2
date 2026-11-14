@@ -547,13 +547,13 @@ def main_loop():
             break
         elif cmd == 'y':
             # Camera capture commented out:
-            # captureImg.capture_image()
+            captureImg.capture_image()
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
                 decision, _ = decide_movement(telem)
-                #send_command(ser, decision)
+                send_command(ser, decision)
         elif cmd == 'a':
             auto_drive_step_by_step(ser)
         elif cmd == 't':
