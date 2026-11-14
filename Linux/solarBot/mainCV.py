@@ -9,7 +9,7 @@ import numpy as np
 import serial
 
 # Camera capture module commented out for manual screenshot testing:
-# import captureImg
+import captureImg
 # Tuned Up referece are  foward 65 width 71 as brush the rest of parameter let god design
 # May peace be with you!
 
