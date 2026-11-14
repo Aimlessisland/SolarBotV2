@@ -10,7 +10,8 @@ import serial
 
 # Camera capture module commented out for manual screenshot testing:
 # import captureImg
-# instand snapped
+# Tuned Up referece are  foward 65 width 71 as brush the rest of parameter let god design
+# May peace be with you!
 
 OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
