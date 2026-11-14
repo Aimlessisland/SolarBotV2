@@ -4,7 +4,7 @@ import cv2
 
 # Easily change this later or adapt for 2 cameras
 CAMERA_SOURCE = "/dev/video0"
-DIR_PATH = os.path.expanduser("~/solarBot/imgForward")
+DIR_PATH = "imgForward"
 
 # Desired resolution
 FRAME_WIDTH = 1920
