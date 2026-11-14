@@ -14,7 +14,7 @@ import serial
 
 OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
-SERIAL_PORT = "/dev/ttyACM1"
+SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 115200
 
 serial_lock = threading.Lock()
