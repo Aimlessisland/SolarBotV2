@@ -557,11 +557,14 @@ def direct_serial_mode(ser):
 # ==========================================================
 def main_loop():
     ser = connect_port()
-
+    captureImg._init_camera()
     while True:
         cmd = input("\nEnter command ('y': single debug snap, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
+            captureImg._cam_ready = False          # <-- ADD THIS: stops background grab thread
+            if captureImg._cap is not None:
+                captureImg._cap.release()
             print("Terminating tracker.")
             if ser and ser.is_open:
                 ser.close()
