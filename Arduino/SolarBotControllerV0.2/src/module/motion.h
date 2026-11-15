@@ -129,7 +129,13 @@ void halt(){
 void updateMotion(){
     if (remainingTicks > 0) {
         remainingTicks--; // Decrement by 1 every 1ms tick
-        Serial.println(remainingTicks);
+        //Serial.println(remainingTicks);
+
+        if (remainingTicks == 12) {
+            analogWrite(RIGHT_LPWM_PIN, 0);
+            analogWrite(RIGHT_RPWM_PIN, 0);
+        }
+
         if (remainingTicks == 0) {
             halt(); // Time's up! Stop all motors immediately.
             Serial.println("ok"); //OK when something is done so Q6A can get that feedback
