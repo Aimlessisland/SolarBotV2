@@ -393,11 +393,11 @@ def decide_movement(telem):
 
         if left_lean is not None:
             if left_lean > DEADZONE:
-                print(f"[PRIORITY 1] Tracking Left Line -> Nose Left ({left_lean:+.1f}px) -> Counter Right (M3 {TURN_DURATION})")
-                return f"M3 {TURN_DURATION}", False
-            elif left_lean < -DEADZONE:
-                print(f"[PRIORITY 1] Tracking Left Line -> Nose Right ({left_lean:+.1f}px) -> Counter Left (M4 {TURN_DURATION})")
+                print(f"[PRIORITY 1] Tracking Left Line -> Nose Left ({left_lean:+.1f}px) -> Counter Right (M4 {TURN_DURATION})")
                 return f"M4 {TURN_DURATION}", False
+            elif left_lean < -DEADZONE:
+                print(f"[PRIORITY 1] Tracking Left Line -> Nose Right ({left_lean:+.1f}px) -> Counter Left (M3 {TURN_DURATION})")
+                return f"M3 {TURN_DURATION}", False
             else:
                 print(f"[PRIORITY 1] Tracking Left Line -> Straight ({left_lean:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
                 return f"M1 {STEP_DURATION}", False
