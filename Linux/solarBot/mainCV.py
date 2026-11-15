@@ -416,7 +416,7 @@ def decide_movement(telem):
                     f"[PRIORITY 2 - STOP] Left line ended (Y={left_end_y} px) & Front edge is close "
                     f"({front_cm:.1f} cm <= {STOP_EDGE_CM} cm, Front Y={front_y} px) -> EDGE DETECTED, STOP MOVING!"
                 )
-                return "M0 0", True
+                return None, True
             else:
                 print(
                     f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
@@ -432,35 +432,35 @@ def decide_movement(telem):
                 )
                 return f"M1 {STEP_DURATION}", False
             else:
-                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING (M0 0)!")
-                return "M0 0", True
+                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
+                return None, True
 
     # ----------------------------------------------------------
     # SAFETY FALLBACK: LEFT LINE COMPLETELY LOST -> STOP!
     # ----------------------------------------------------------
     if front_cm is not None and front_cm <= STOP_EDGE_CM:
-        print(f"[PRIORITY 2 - STOP] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) -> STOP MOVING (M0 0)!")
-        return "M0 0", True
+        print(f"[PRIORITY 2 - STOP] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) -> STOP MOVING!")
+        return None, True
 
-    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING (M0 0)!")
-    return "M0 0", True
+    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
+    return None, True
 
 
 # ==========================================================
-# STEP-BY-STEP CAMERA TEST LOOP (MOVEMENT COMMENTED OUT)
+# STEP-BY-STEP AUTO DRIVE LOOP
 # ==========================================================
 def auto_drive_step_by_step(ser):
     global blind_approach_steps
     blind_approach_steps = 0
 
     print("\n==========================================")
-    print(">>> STEP-BY-STEP CAMERA TEST MODE (NO MOVE) <<<")
+    print(">>> STEP-BY-STEP AUTO DRIVE MODE <<<")
     print("==========================================")
 
     step_count = 0
 
     while True:
-        step_input = input(f"\n[Step {step_count + 1}] Press Enter to snap & check decision (or 'q' to stop): ").strip().lower()
+        step_input = input(f"\n[Step {step_count + 1}] Press Enter to snap & drive (or 'q' to stop): ").strip().lower()
         if step_input == 'q':
             print("Stopped.")
             break
@@ -476,11 +476,11 @@ def auto_drive_step_by_step(ser):
 
         outputImage(traced_img, img_path)
         cmd, should_stop = decide_movement(telem)
-        # Uncomment below when ready to move the robot:
-        # send_command(ser, cmd)
+        if cmd is not None:
+            send_command(ser, cmd)
 
         if should_stop:
-            print("[TEST COMPLETE] Stop condition triggered.")
+            print("[AUTO COMPLETE] Stop condition reached.")
             break
 
     print("==========================================\n")
@@ -528,7 +528,7 @@ def mobileControl(ser):
 def direct_serial_mode(ser):
     print("\n==========================================")
     print(">>> DIRECT TERMINAL MODE ('t' MODE) <<<")
-    print("Type raw commands (e.g. M1 100, M20 100, M30 100, M0 0)")
+    print("Type raw commands (e.g. M1 100, M20 100, M30 100)")
     print("Type 'q' to return to main menu.")
     print("==========================================")
 
@@ -571,8 +571,8 @@ def main_loop():
             if traced_img is not None:
                 outputImage(traced_img, img_path)
                 decision, _ = decide_movement(telem)
-                # Uncomment below when ready to move the robot:
-                send_command(ser, decision)
+                if decision is not None:
+                    send_command(ser, decision)
         elif cmd == 'a':
             auto_drive_step_by_step(ser)
         elif cmd == 't':
