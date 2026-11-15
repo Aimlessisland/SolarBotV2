@@ -14,7 +14,7 @@
 #define DRIVER_CUSTOM_RELAY   2 
 
 // --- Default Motor Speeds ---
-#define DEFAULT_LEFT_PWM_SPEED   130
+#define DEFAULT_LEFT_PWM_SPEED   140
 #define DEFAULT_RIGHT_PWM_SPEED  150  
 #define DEFAULT_PUMP_PWM_SPEED 160   // Tweak this value (e.g. 120 - 200)
 // ============================================================================
