@@ -37,9 +37,9 @@ def capture_image():
   cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
   # 2. Adjust Camera Properties for Reflection/Noise Reduction
-  cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 1 = Manual mode on V4L2
+  cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)  # 1 = Manual mode on V4L2
   cap.set(cv2.CAP_PROP_CONTRAST, 100)
-  cap.set(cv2.CAP_PROP_BRIGHTNESS, 100)
+  cap.set(cv2.CAP_PROP_BRIGHTNESS, 150)
   cap.set(cv2.CAP_PROP_EXPOSURE, -5)
 
   # Warm-up buffer (fast at 30 FPS)
