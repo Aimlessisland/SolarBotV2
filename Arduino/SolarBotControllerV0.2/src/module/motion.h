@@ -131,7 +131,7 @@ void updateMotion(){
         remainingTicks--; // Decrement by 1 every 1ms tick
         //Serial.println(remainingTicks);
 
-        if (remainingTicks == 20) {
+        if (remainingTicks == 12) {
             analogWrite(RIGHT_LPWM_PIN, 0);
             analogWrite(RIGHT_RPWM_PIN, 0);
         }
