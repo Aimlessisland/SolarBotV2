@@ -447,41 +447,44 @@ def decide_movement(telem):
 
 
 # ==========================================================
-# STEP-BY-STEP AUTO DRIVE LOOP
+# CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
     global blind_approach_steps
     blind_approach_steps = 0
 
     print("\n==========================================")
-    print(">>> STEP-BY-STEP AUTO DRIVE MODE <<<")
+    print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
+    print("Running until edge/stop condition (Press Ctrl+C to abort)")
     print("==========================================")
 
     step_count = 0
 
-    while True:
-        step_input = input(f"\n[Step {step_count + 1}] Press Enter to snap & drive (or 'q' to stop): ").strip().lower()
-        if step_input == 'q':
-            print("Stopped.")
-            break
+    try:
+        while True:
+            step_count += 1
+            print(f"\n>>> [AUTO CYCLE {step_count}] <<<")
 
-        step_count += 1
+            captureImg.capture_image()
 
-        captureImg.capture_image()
+            traced_img, img_path, telem = process_and_trace()
+            if traced_img is None:
+                print("[STOP] Camera frame invalid — aborting auto drive.")
+                break
 
-        traced_img, img_path, telem = process_and_trace()
-        if traced_img is None:
-            print("[STOP] Waiting for a valid image.")
-            continue
+            outputImage(traced_img, img_path)
+            cmd, should_stop = decide_movement(telem)
 
-        outputImage(traced_img, img_path)
-        cmd, should_stop = decide_movement(telem)
-        if cmd is not None:
-            send_command(ser, cmd)
+            if cmd is not None:
+                send_command(ser, cmd)
+                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo
 
-        if should_stop:
-            print("[AUTO COMPLETE] Stop condition reached.")
-            break
+            if should_stop:
+                print(f"[AUTO COMPLETE] Stop condition reached after {step_count} cycle(s).")
+                break
+
+    except KeyboardInterrupt:
+        print("\n[AUTO ABORTED] Stopped manually via Ctrl+C.")
 
     print("==========================================\n")
 
@@ -556,7 +559,7 @@ def main_loop():
     ser = connect_port()
 
     while True:
-        cmd = input("\nEnter command ('y': single debug snap, 'a': step-by-step drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
+        cmd = input("\nEnter command ('y': single debug snap, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
             print("Terminating tracker.")
