@@ -1,0 +1,2 @@
+pio run //for regular run build
+pio run --target upload --upload-port /dev/ttyACM0 // for upload check the ACM port 0 or 1
