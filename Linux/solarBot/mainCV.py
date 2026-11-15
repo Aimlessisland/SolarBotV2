@@ -8,9 +8,8 @@ import cv2
 import numpy as np
 import serial
 
-# Camera capture module commented out for manual screenshot testing:
 import captureImg
-# Tuned Up referece are  foward 65 width 71 as brush the rest of parameter let god design
+# Tuned Up reference are forward 65 width 71 as brush the rest of parameter let god design
 # May peace be with you!
 
 OUTPUT_DIR = "objectDetectTest"
@@ -81,7 +80,6 @@ def fit_curve_3pts(p1, p2, p3, axis="y_along_x", num_points=60):
 # PROCESS & TRACE PIPELINE
 # ==========================================================
 def process_and_trace():
-    # Specifically target front_*.jpg files
     list_of_images = glob.glob(os.path.join(FORWARD_DIR, "front_*.jpg"))
     if not list_of_images:
         list_of_images = glob.glob(os.path.join(FORWARD_DIR, "front_*.png"))
@@ -91,7 +89,6 @@ def process_and_trace():
         print(f"Please drop your image (e.g., front_0001.jpg) into '{FORWARD_DIR}' and try again.\n")
         return None, None, None
 
-    # Pick the newest front_*.jpg in the folder
     latest_image_path = max(list_of_images, key=os.path.getmtime)
     print("\n" + "=" * 55)
     print(f"Processing latest frame: {latest_image_path}")
@@ -208,8 +205,11 @@ def process_and_trace():
             lean_value = round(float(np.mean(pair_deltas)), 1)
 
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
-        print(f"  ==> Left Lean Result: {lean_value} px | Far Line Alive: {has_far_left}")
-        return lean_value, has_far_left
+        left_end_y = detected_points[0][1] if len(detected_points) > 0 else None
+        left_end_cm = max(offsets_by_cm.keys()) if len(offsets_by_cm) > 0 else None
+
+        print(f"  ==> Left Lean Result: {lean_value} px | Far Line Alive: {has_far_left} | Topmost Left Y: {left_end_y} px ({left_end_cm} cm)")
+        return lean_value, has_far_left, left_end_y, left_end_cm
 
     def rightTracking():
         print("\n--- [RIGHT LINE SCAN REPORT] ---")
@@ -310,9 +310,11 @@ def process_and_trace():
                     break
                     
         front_cm = None
+        front_y = None
         if len(detected_points) >= 3:
             detected_arr = np.array(detected_points, dtype=np.float64)
             avg_y = float(np.mean(detected_arr[:, 1]))
+            front_y = round(avg_y, 1)
             front_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
             
             poly_tracked = np.polyfit(detected_arr[:, 0], detected_arr[:, 1], 2)
@@ -321,16 +323,16 @@ def process_and_trace():
             tracked_curve = np.column_stack((x_vals, y_vals)).astype(np.int32).reshape((-1, 1, 2))
             cv2.polylines(traced_image, [tracked_curve], isClosed=False, color=(0, 255, 0), thickness=2)
 
-            print(f"  -> Hits Found: {len(detected_points)}/25 points | Average Y: {avg_y:.1f} px | Distance: {front_cm:.1f} cm")
+            print(f"  -> Hits Found: {len(detected_points)}/25 points | Front Edge Y: {front_y:.1f} px | Distance: {front_cm:.1f} cm")
         else:
             print(f"  -> Hits Found: {len(detected_points)}/25 (Insufficient for front edge)")
 
-        return front_cm
+        return front_cm, front_y
 
     # Execute tracking routines
-    left_lean, has_far_left = leftTracking()
+    left_lean, has_far_left, left_end_y, left_end_cm = leftTracking()
     right_lean, has_far_right = rightTracking()
-    front_cm = frontTracking()
+    front_cm, front_y = frontTracking()
 
     # 4. Draw Boundary Overlays
     cv2.polylines(traced_image, [left_curve], isClosed=False, color=(128, 0, 128), thickness=2)
@@ -362,9 +364,12 @@ def process_and_trace():
     telemetry = {
         "left_lean": left_lean,
         "has_far_left": has_far_left,
+        "left_end_y": left_end_y,
+        "left_end_cm": left_end_cm,
         "right_lean": right_lean,
         "has_far_right": has_far_right,
-        "front_cm": front_cm
+        "front_cm": front_cm,
+        "front_y": front_y
     }
 
     return traced_image, latest_image_path, telemetry
@@ -381,90 +386,116 @@ def outputImage(traced_image, image_path):
     print(f"Saved tracked image: {out_path}\n")
 
 # ==========================================================
-# DECISION ARBITRATION
+# DECISION ARBITRATION (SINGLE-DECISION FORWARD TO 10CM EDGE)
 # ==========================================================
 def decide_movement(telem):
     DEADZONE = 4.0
     STOP_EDGE_CM = 10.0
+    Y_MATCH_TOLERANCE = 40.0  # Max px gap between Front Edge Y and Left Line End Y
     STEP_DURATION = 200
 
     left_lean = telem["left_lean"]
-    right_lean = telem["right_lean"]
-    has_far_side = telem["has_far_left"] or telem["has_far_right"]
+    has_far_left = telem["has_far_left"]
+    left_end_y = telem["left_end_y"]
+    left_end_cm = telem["left_end_cm"]
     front_cm = telem["front_cm"]
+    front_y = telem["front_y"]
 
     print("\n" + "=" * 55)
     print("TELEMETRY SUMMARY:")
-    print(f"  Front Distance : {front_cm} cm")
-    print(f"  Far Line Alive : {has_far_side}")
+    print(f"  Front Distance : {front_cm} cm (Front Edge Y = {front_y} px)")
+    print(f"  Far Left Alive : {has_far_left} (Left Line Ends at Y = {left_end_y} px / {left_end_cm} cm)")
     print(f"  Left Lean      : {left_lean} px")
-    print(f"  Right Lean     : {right_lean} px")
     print("=" * 55)
 
-    # 1. Edge Stop Arbitration
-    if front_cm is not None and not has_far_side:
-        print(f"[EDGE WARNING] Front edge detected at {front_cm:.1f} cm (True Array Termination)")
-        if front_cm <= STOP_EDGE_CM:
-            print(f"[SUCCESS] Reached target stopping margin ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm)! HALTING.")
+    # 1. No More Left Line Ahead -> Approach Front Edge & Stop at <= 10cm
+    if not has_far_left:
+        y_aligned = False
+        y_diff = None
+        if front_y is not None and left_end_y is not None:
+            y_diff = abs(front_y - left_end_y)
+            y_aligned = (y_diff <= Y_MATCH_TOLERANCE)
+
+        if front_cm is not None and front_cm <= STOP_EDGE_CM:
+            if y_aligned:
+                print(
+                    f"[EDGE DETECTED] No more left line! Front edge Y ({front_y} px) == "
+                    f"Left line end Y ({left_end_y} px, diff {y_diff:.1f} px) at {front_cm:.1f} cm "
+                    f"(<= {STOP_EDGE_CM} cm) -> EDGE DETECTED, STOP MOVING!"
+                )
+            else:
+                print(
+                    f"[EDGE DETECTED] No more left line! Front edge at {front_cm:.1f} cm "
+                    f"(<= {STOP_EDGE_CM} cm) [Front Y={front_y} px, Left End Y={left_end_y} px] "
+                    f"-> EDGE DETECTED, STOP MOVING!"
+                )
             return "M0 0", True
 
-    # 2. Steering & Tracking Arbitration
+        if front_cm is not None:
+            print(
+                f"[APPROACHING EDGE] No more left line | Front edge at {front_cm:.1f} cm "
+                f"(Front Y={front_y} px, Left End Y={left_end_y} px) > {STOP_EDGE_CM} cm "
+                f"-> Keep moving forward (M1 {STEP_DURATION})"
+            )
+        else:
+            print(
+                f"[APPROACHING EDGE] No more left line (Left End Y={left_end_y} px) & "
+                f"front edge not at {STOP_EDGE_CM} cm yet -> Keep moving forward (M1 {STEP_DURATION})"
+            )
+        return f"M1 {STEP_DURATION}", False
+
+    # 2. Safety Edge Check Even While Left Line Is Visible
+    if front_cm is not None and front_cm <= STOP_EDGE_CM:
+        print(f"[EDGE DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) -> EDGE DETECTED, STOP MOVING!")
+        return "M0 0", True
+
+    # 3. Normal Left-Line Steering Arbitration
     if left_lean is not None:
         if left_lean > DEADZONE:
-            print(f"Action: Tracking Left Line -> Nose Left ({left_lean:+.1f}px) -> Counter Right")
+            print(f"Action: Tracking Left Line -> Nose Left ({left_lean:+.1f}px) -> Counter Right (M3 {STEP_DURATION})")
             return f"M3 {STEP_DURATION}", False
         elif left_lean < -DEADZONE:
-            print(f"Action: Tracking Left Line -> Nose Right ({left_lean:+.1f}px) -> Counter Left")
+            print(f"Action: Tracking Left Line -> Nose Right ({left_lean:+.1f}px) -> Counter Left (M4 {STEP_DURATION})")
             return f"M4 {STEP_DURATION}", False
         else:
-            print(f"Action: Tracking Left Line -> Parallel ({left_lean:+.1f}px) -> Step Forward")
+            print(f"Action: Tracking Left Line -> Parallel ({left_lean:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
-
-    elif right_lean is not None:
-        if right_lean > DEADZONE:
-            print("Action: Tracking Right Line -> Counter Left")
-            return f"M4 {STEP_DURATION}", False
-        elif right_lean < -DEADZONE:
-            print("Action: Tracking Right Line -> Counter Right")
-            return f"M3 {STEP_DURATION}", False
-        else:
-            print("Action: Tracking Right Line -> Parallel -> Step Forward")
-            return f"M1 {STEP_DURATION}", False
-
     else:
-        print("Action: Center Track (No side frames) -> Driving Straight Forward")
+        print(f"Action: Far Left Line Alive -> Step Forward (M1 {STEP_DURATION})")
         return f"M1 {STEP_DURATION}", False
 
 # ==========================================================
-# STEP-BY-STEP MANUAL DRIVE LOOP
+# STEP-BY-STEP CAMERA TEST LOOP (MOVEMENT COMMENTED OUT)
 # ==========================================================
 def auto_drive_step_by_step(ser):
     print("\n==========================================")
-    print(">>> STEP-BY-STEP MANUAL PROCESSING MODE <<<")
+    print(">>> STEP-BY-STEP CAMERA TEST MODE (NO MOVE) <<<")
     print("==========================================")
 
     step_count = 0
 
     while True:
-        step_input = input(f"\n[Step {step_count + 1}] Drop 'front_xxxx.jpg' into '{FORWARD_DIR}' & press Enter (or 'q' to stop): ").strip().lower()
+        step_input = input(f"\n[Step {step_count + 1}] Press Enter to snap & check decision (or 'q' to stop): ").strip().lower()
         if step_input == 'q':
             print("Stopped.")
             break
 
         step_count += 1
 
-        # Camera capture is intentionally commented out for manual control:
-        # captureImg.capture_image()
+        captureImg.capture_image()
 
         traced_img, img_path, telem = process_and_trace()
         if traced_img is None:
             print("[STOP] Waiting for a valid image.")
             continue
 
+        outputImage(traced_img, img_path)
         cmd, should_stop = decide_movement(telem)
-        send_command(ser, cmd)
+        # Movement commented out while testing camera:
+        # send_command(ser, cmd)
 
         if should_stop:
+            print("[TEST COMPLETE] Edge stop triggered cleanly.")
             break
 
     print("==========================================\n")
@@ -546,14 +577,14 @@ def main_loop():
                 print("Serial port closed.")
             break
         elif cmd == 'y':
-            # Camera capture commented out:
             captureImg.capture_image()
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
                 decision, _ = decide_movement(telem)
-                #send_command(ser, decision)
+                # Movement commented out while testing camera:
+                send_command(ser, decision)
         elif cmd == 'a':
             auto_drive_step_by_step(ser)
         elif cmd == 't':
