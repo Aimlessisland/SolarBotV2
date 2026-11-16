@@ -41,7 +41,7 @@
  * - Still twists left on stop  -> Increase value (e.g. 14 or 15)
  * - Starts twisting right       -> Decrease value (e.g. 8 or 10)
  */
-#define RIGHT_EARLY_STOP_TICKS 24
+#define RIGHT_EARLY_STOP_TICKS 12
 
 // ============================================================================
 // @section State Variables & Timers
