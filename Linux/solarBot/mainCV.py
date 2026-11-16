@@ -154,8 +154,19 @@ def process_and_trace():
     def leftTracking():
         print("\n--- [PRIORITY 1: LEFT LINE SCAN REPORT] ---")
         left_perspective_corrections = {
-            65: -10, 60: -11, 55: -12, 50: -13, 45: -14, 40: -16, 35: -20, 30: -20,
-            25: -21, 20: -24, 15: -27, 10: -32, 5:  -36
+            65: -24,
+            60: -5,
+            55: -6,
+            50: -7,
+            45: -7,
+            40: -10,
+            35: -13,
+            30: -15,
+            25: -19,
+            20: -23,
+            15: -28,
+            10: -35,
+            5:  -38
         }
         MAX_OFFSET_JUMP_PX = 20  # Rejects sudden horizontal jumps from glare/seams
 
