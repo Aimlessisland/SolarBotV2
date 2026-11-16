@@ -229,7 +229,9 @@ def process_and_trace():
             lean_value = round(float(np.median(pair_deltas)), 1)
 
         valid_count = len(offsets_by_cm)
-        near_count = sum(1 for cm_k in offsets_by_cm if cm_k <= 25)
+        near_offsets = [offsets_by_cm[cm_k] for cm_k in offsets_by_cm if cm_k <= 25]
+        near_count = len(near_offsets)
+        near_offset = round(float(np.median(near_offsets)), 1) if near_count > 0 else None
         has_near_left = (near_count >= 2)
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
         is_left_valid = (valid_count >= 4) or has_near_left
@@ -240,7 +242,7 @@ def process_and_trace():
 
         print(
             f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {near_count} near) | "
-            f"Far Alive: {has_far_left} | Lean: {lean_value} px | Ends at Y={left_end_y} px ({left_end_cm} cm)"
+            f"Far Alive: {has_far_left} | Lean: {lean_value} px | Near Offset: {near_offset} px | Ends at Y={left_end_y} px ({left_end_cm} cm)"
         )
         return {
             "is_left_valid": is_left_valid,
@@ -248,6 +250,7 @@ def process_and_trace():
             "has_near_left": has_near_left,
             "has_far_left": has_far_left,
             "left_lean": lean_value,
+            "near_offset": near_offset,
             "left_end_y": left_end_y,
             "left_end_cm": left_end_cm,
         }
@@ -370,11 +373,13 @@ def outputImage(traced_image, image_path):
 def decide_movement(telem):
     global blind_approach_steps
 
-    DEADZONE = 10.0                # Wide enough to ignore minor chassis slide
+    DEADZONE = 10.0                # Combined error threshold before steering
+    TARGET_OFFSET = 50.0           # Ideal calibrated lane offset (px)
+    LANE_GAIN = 0.75               # How strongly sideways shift pulls steering
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
     STEP_DURATION = 400            # Forward pulse duration (ms)
-    TURN_DURATION = 300            # Shorter turn pulse to prevent over-steering
-    MAX_BLIND_APPROACH_STEPS = 2   # Max forward pulses if left line ends before front line appears
+    TURN_DURATION = 220            # Turn pulse (>150 triggers smooth ramp without over-swinging)
+    MAX_BLIND_APPROACH_STEPS = 2  # Max forward pulses if left line ends before front line appears
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -402,18 +407,22 @@ def decide_movement(telem):
         if front_cm is not None:
             print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, but Left Line is still alive ahead -> KEEP GOING!")
 
-        if left_lean is not None:
-            if left_lean > DEADZONE:
-                print(f"[PRIORITY 1] Tracking Left Line -> Nose Left ({left_lean:+.1f}px) -> Counter Right (M4 {TURN_DURATION})")
-                return f"M4 {TURN_DURATION}", False
-            elif left_lean < -DEADZONE:
-                print(f"[PRIORITY 1] Tracking Left Line -> Nose Right ({left_lean:+.1f}px) -> Counter Left (M3 {TURN_DURATION})")
-                return f"M3 {TURN_DURATION}", False
-            else:
-                print(f"[PRIORITY 1] Tracking Left Line -> Straight ({left_lean:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
-                return f"M1 {STEP_DURATION}", False
+        lane_error = (near_offset - TARGET_OFFSET) if near_offset is not None else 0.0
+        angle_error = left_lean if left_lean is not None else 0.0
+        total_error = angle_error + (LANE_GAIN * lane_error)
+
+        print(f"[LANE CHECK] Angle={angle_error:+.1f}px | LaneShift={lane_error:+.1f}px | TotalError={total_error:+.1f}px")
+
+        if total_error > DEADZONE:
+            # Nose pointed left OR shifted too far right (offset > 50) -> Steer Right (M4)
+            print(f"[PRIORITY 1] Correct Right (Total={total_error:+.1f}px) -> M4 {TURN_DURATION}")
+            return f"M4 {TURN_DURATION}", False
+        elif total_error < -DEADZONE:
+            # Nose pointed right OR shifted too close to left tape (offset < 50) -> Steer Left (M3)
+            print(f"[PRIORITY 1] Correct Left (Total={total_error:+.1f}px) -> M3 {TURN_DURATION}")
+            return f"M3 {TURN_DURATION}", False
         else:
-            print(f"[PRIORITY 1] Far Left Line Alive -> Step Forward (M1 {STEP_DURATION})")
+            print(f"[PRIORITY 1] Centered & Straight (Total={total_error:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
