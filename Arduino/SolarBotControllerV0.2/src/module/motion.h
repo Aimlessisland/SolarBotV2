@@ -33,9 +33,9 @@
  */
 #define SMOOTH_RAMP
 
-#define MIN_PWM_SPEED   80   // Lowest PWM that still moves the worm-gear wheels
-#define RAMP_STEP       8    // PWM change per tick (higher = faster ramp)
-#define DECEL_TICKS     15   // Start slowing down 15 ticks (~30ms) before stop
+#define MIN_PWM_SPEED   40   // Lowest PWM that still moves the worm-gear wheels
+#define RAMP_STEP       2    // PWM change per tick (higher = faster ramp)
+#define DECEL_TICKS     45   // Start slowing down 15 ticks (~30ms) before stop
 
 // ============================================================================
 // @section State Variables & Timers
