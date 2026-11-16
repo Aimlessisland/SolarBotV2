@@ -361,8 +361,8 @@ def decide_movement(telem):
 
     DEADZONE = 10.0                # Wide enough to ignore minor chassis slide
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
-    STEP_DURATION = 200            # Forward pulse duration (ms)
-    TURN_DURATION = 100            # Shorter turn pulse to prevent over-steering
+    STEP_DURATION = 400            # Forward pulse duration (ms)
+    TURN_DURATION = 300            # Shorter turn pulse to prevent over-steering
     MAX_BLIND_APPROACH_STEPS = 2   # Max forward pulses if left line ends before front line appears
 
     is_left_valid = telem["is_left_valid"]
