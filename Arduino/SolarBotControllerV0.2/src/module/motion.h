@@ -36,10 +36,10 @@
 #define ENABLE_ACCEL_DECEL
 
 #define MIN_ACCEL_TICKS     200  // Only activate accel/decel when command > 200 ticks
-#define START_PWM_SPEED     60   // Starting & ending PWM speed during wind-up/down
+#define START_PWM_SPEED     20  // Starting & ending PWM speed during wind-up/down
 #define PWM_STEP_SIZE       20   // Add or subtract 20 PWM points each step
-#define PWM_STEP_TICKS      4    // Change PWM every 4 ticks (try 2 for faster, 4 for slower)
-#define DECEL_REMAIN_TICKS  32   // Begin decelerating when 32 ticks remain
+#define PWM_STEP_TICKS      15    // Change PWM every 4 ticks (try 2 for faster, 4 for slower)
+#define DECEL_REMAIN_TICKS  120   // Begin decelerating when 32 ticks remain
 
 // ============================================================================
 // @section State Variables & Timers
