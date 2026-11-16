@@ -39,8 +39,8 @@
 #define PWM_STEP_TICKS      10   // Update PWM every 10 ticks (20ms at 2ms slice)[cite: 2]
 
 // --- LEFT TRACK TUNING (BTS7960 43A - Gentle, Early Fade-Out) ---
-#define LEFT_START_PWM      30   // Starting/ending PWM floor for Left track
-#define LEFT_ACCEL_STEP     20   // +20 PWM per step during acceleration
+#define LEFT_START_PWM      20   // Lower starting PWM so Left launches softer (was 30)
+#define LEFT_ACCEL_STEP     8    // +8 PWM per step instead of +20 (2.5x slower wind-up)
 #define LEFT_DECEL_STEP     10   // -10 PWM per step (smaller = slower, softer off)
 #define LEFT_DECEL_TICKS    140  // Start slowing Left track 140 ticks (~280ms) before 0[cite: 2]
 
