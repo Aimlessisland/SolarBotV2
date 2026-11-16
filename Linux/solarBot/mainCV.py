@@ -378,13 +378,14 @@ def decide_movement(telem):
     LANE_GAIN = 0.75               # How strongly sideways shift pulls steering
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
     STEP_DURATION = 400            # Forward pulse duration (ms)
-    TURN_DURATION = 220            # Turn pulse (>150 triggers smooth ramp without over-swinging)
-    MAX_BLIND_APPROACH_STEPS = 2  # Max forward pulses if left line ends before front line appears
+    TURN_DURATION = 220            # Turn pulse duration (ms)
+    MAX_BLIND_APPROACH_STEPS = 2   # Max forward pulses if left line ends before front line appears
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
     has_far_left = telem["has_far_left"]
     left_lean = telem["left_lean"]
+    near_offset = telem["near_offset"]
     left_end_y = telem["left_end_y"]
     left_end_cm = telem["left_end_cm"]
     front_cm = telem["front_cm"]
@@ -395,6 +396,7 @@ def decide_movement(telem):
     print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} continuous pts)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
     print(f"  [P1] Left Lean       : {left_lean} px")
+    print(f"  [P1] Near Offset     : {near_offset} px (Target: {TARGET_OFFSET} px)")
     print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
     print("=" * 55)
 
@@ -414,11 +416,9 @@ def decide_movement(telem):
         print(f"[LANE CHECK] Angle={angle_error:+.1f}px | LaneShift={lane_error:+.1f}px | TotalError={total_error:+.1f}px")
 
         if total_error > DEADZONE:
-            # Nose pointed left OR shifted too far right (offset > 50) -> Steer Right (M4)
             print(f"[PRIORITY 1] Correct Right (Total={total_error:+.1f}px) -> M4 {TURN_DURATION}")
             return f"M4 {TURN_DURATION}", False
         elif total_error < -DEADZONE:
-            # Nose pointed right OR shifted too close to left tape (offset < 50) -> Steer Left (M3)
             print(f"[PRIORITY 1] Correct Left (Total={total_error:+.1f}px) -> M3 {TURN_DURATION}")
             return f"M3 {TURN_DURATION}", False
         else:
