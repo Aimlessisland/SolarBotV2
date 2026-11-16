@@ -558,11 +558,12 @@ def direct_serial_mode(ser):
 def main_loop():
     ser = connect_port()
     captureImg._init_camera()
+
     while True:
-        cmd = input("\nEnter command ('y': single debug snap, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
+        cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
-            captureImg._cam_ready = False          # <-- ADD THIS: stops background grab thread
+            captureImg._cam_ready = False
             if captureImg._cap is not None:
                 captureImg._cap.release()
             print("Terminating tracker.")
@@ -579,12 +580,20 @@ def main_loop():
                 decision, _ = decide_movement(telem)
                 if decision is not None:
                     send_command(ser, decision)
+        elif cmd == 'c':
+            captureImg.capture_image()
+
+            traced_img, img_path, telem = process_and_trace()
+            if traced_img is not None:
+                outputImage(traced_img, img_path)
+                decision, _ = decide_movement(telem)
+                print(f"[AI ONLY - NO MOVE] Planned command: {decision}")
         elif cmd == 'a':
             auto_drive_step_by_step(ser)
         elif cmd == 't':
             direct_serial_mode(ser)
         else:
-            print("Invalid input. Type 'y', 'a', 't', or 'n'.")
+            print("Invalid input. Type 'y', 'c', 'a', 't', or 'n'.")
 
 
 if __name__ == "__main__":
