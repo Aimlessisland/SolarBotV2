@@ -4,24 +4,19 @@
 /**
  * ============================================================================
  * @file    motion.h
- * @brief   Non-blocking Differential Drive & Accel/Decel Motion Controller
+ * @brief   Non-blocking Differential Drive & Split Accel/Decel Controller
  * ============================================================================
  * @details Handles real-time non-blocking motor pulses driven by the 2ms
- *          time-slicing scheduler in main.cpp without introducing loop
- *          latency or blocking delays.
+ *          time-slicing scheduler in main.cpp without blocking delays[cite: 2].
  * 
- *  EXECUTION ORDER: RIGHT TRACK FIRST -> LEFT TRACK SECOND
+ *  INDEPENDENT LEFT vs. RIGHT ACCEL / DECEL (DRIVER MISMATCH COMPENSATION):
  *  ---------------------------------------------------------------------------
- *  - All dual-track commands (start, PWM update, and halt) write the Right
- *    track pins first, followed immediately by the Left track pins.
- * 
- *  CONDITIONAL ACCEL / DECEL PROFILE (LONG MOVES ONLY):
- *  ---------------------------------------------------------------------------
- *  - Short Commands (<= 150 ticks) : Instant full PWM (snappy tracking steps).
- *  - Long Commands  (>  150 ticks) :
- *      1. Accelerate : Starts at START_PWM_SPEED, adds +20 PWM every 15 ticks.
- *      2. Cruise     : Holds RIGHT_PWM_SPEED / LEFT_PWM_SPEED.
- *      3. Decelerate : Subtracts -20 PWM every 15 ticks during final 120 ticks.
+ *  - Left Track  (BTS7960 H-Bridge) : Active braking snaps hard on fast cutoff[cite: 2].
+ *                                     Uses earlier, gentler deceleration to
+ *                                     ease off smoothly.
+ *  - Right Track (IRFB3306 + Relay) : Natural turn-off lag at stop[cite: 2].
+ *                                     Uses later, faster deceleration so both
+ *                                     tracks finish stopping together.
  * ============================================================================
  */
 
@@ -31,20 +26,29 @@
 #include "TIP42.h"
 
 // ============================================================================
-// @section Motion Tuning & Accel/Decel Configuration (Marlin-Style)
+// @section Motion Tuning & Split Accel/Decel Configuration (Marlin-Style)
 // ============================================================================
 
 /**
- * Conditional Acceleration & Deceleration
- * Comment out (//#define) to disable completely and always use instant PWM.
+ * Master Toggle for Conditional Acceleration & Deceleration
+ * Comment out (//#define) to disable ramping and run instant full PWM.
  */
 #define ENABLE_ACCEL_DECEL
 
-#define MIN_ACCEL_TICKS     150  // M1 100 stays instant; M1 200+ uses accel/decel
-#define START_PWM_SPEED     20   // Starting & ending PWM speed during wind-up/down
-#define PWM_STEP_SIZE       20   // Add or subtract 20 PWM points each step
-#define PWM_STEP_TICKS      15   // Change every 15 ticks (30ms per step at 2ms slice)
-#define DECEL_REMAIN_TICKS  120  // Start slowing down 120 ticks (~240ms) before stop
+#define MIN_ACCEL_TICKS     150  // Only use accel/decel when command > 150 ticks
+#define PWM_STEP_TICKS      10   // Update PWM every 10 ticks (20ms at 2ms slice)[cite: 2]
+
+// --- LEFT TRACK TUNING (BTS7960 43A - Gentle, Early Fade-Out) ---
+#define LEFT_START_PWM      30   // Starting/ending PWM floor for Left track
+#define LEFT_ACCEL_STEP     20   // +20 PWM per step during acceleration
+#define LEFT_DECEL_STEP     10   // -10 PWM per step (smaller = slower, softer off)
+#define LEFT_DECEL_TICKS    140  // Start slowing Left track 140 ticks (~280ms) before 0[cite: 2]
+
+// --- RIGHT TRACK TUNING (IRFB3306 + Relay - Later, Faster Cutoff) ---
+#define RIGHT_START_PWM     30   // Starting/ending PWM floor for Right track
+#define RIGHT_ACCEL_STEP    20   // +20 PWM per step during acceleration
+#define RIGHT_DECEL_STEP    25   // -25 PWM per step (larger = drops PWM faster)
+#define RIGHT_DECEL_TICKS   60   // Start slowing Right track 60 ticks (~120ms) before 0[cite: 2]
 
 // ============================================================================
 // @section State Variables & Timers
@@ -59,8 +63,8 @@ static int RIGHT_PWM_SPEED = DEFAULT_RIGHT_PWM_SPEED;
     static bool useAccelDecel    = false;
     static int  motionMode       = 0;
     static int  stepTickCounter  = 0;
-    static int  currentRightPwm  = 0;
     static int  currentLeftPwm   = 0;
+    static int  currentRightPwm  = 0;
 #endif
 
 void setLeftPwmSpeed(int value) {
@@ -75,17 +79,9 @@ void setRightPwmSpeed(int value) {
 // @section Low-Level Track Hardware Wrappers (Untouched Signatures)
 // ============================================================================
 
-void moveRightTrackForward(){
-    #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
-        moveBTS7960forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
-    #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
-        moveTIP42forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
-    #endif
-}
-
 /**
  * @brief Triggers non-blocking forward motion for a specified tick duration.
- * @param amount Number of 2ms time slices (ticks) to execute the movement.
+ * @param amount Number of 2ms time slices (ticks) to execute the movement[cite: 2].
  */
 void moveLeftTrackForward(){
     #if LEFT_MOTOR_DRIVER == DRIVER_BTS7960
@@ -95,11 +91,11 @@ void moveLeftTrackForward(){
     #endif
 }
 
-void moveRightTrackBackward(){
+void moveRightTrackForward(){
     #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
-        moveBTS7960backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
+        moveBTS7960forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
     #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
-        moveTIP42backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
+        moveTIP42forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
     #endif
 }
 
@@ -111,27 +107,19 @@ void moveLeftTrackBackward(){
     #endif
 }
 
+void moveRightTrackBackward(){
+    #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
+        moveBTS7960backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
+    #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
+        moveTIP42backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, RIGHT_PWM_SPEED);
+    #endif
+}
+
 // ============================================================================
-// @section Accel/Decel Helpers (Right Track First -> Left Track Second)
+// @section Split Left/Right Accel & Decel Helpers
 // ============================================================================
 
 #ifdef ENABLE_ACCEL_DECEL
-void writeRightPwm(bool forward){
-    if (forward) {
-        #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
-            moveBTS7960forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
-        #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
-            moveTIP42forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
-        #endif
-    } else {
-        #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
-            moveBTS7960backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
-        #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
-            moveTIP42backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
-        #endif
-    }
-}
-
 void writeLeftPwm(bool forward){
     if (forward) {
         #if LEFT_MOTOR_DRIVER == DRIVER_BTS7960
@@ -148,41 +136,65 @@ void writeLeftPwm(bool forward){
     }
 }
 
+void writeRightPwm(bool forward){
+    if (forward) {
+        #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
+            moveBTS7960forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
+        #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
+            moveTIP42forward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
+        #endif
+    } else {
+        #if RIGHT_MOTOR_DRIVER == DRIVER_BTS7960
+            moveBTS7960backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
+        #elif RIGHT_MOTOR_DRIVER == DRIVER_CUSTOM_RELAY
+            moveTIP42backward(RIGHT_LPWM_PIN, RIGHT_RPWM_PIN, currentRightPwm);
+        #endif
+    }
+}
+
 void applyAccelDecelOutput(){
-    if      (motionMode == 1) { writeRightPwm(true);  writeLeftPwm(true);  } // M1 Forward (Right -> Left)
-    else if (motionMode == 2) { writeRightPwm(false); writeLeftPwm(false); } // M2 Backward (Right -> Left)
-    else if (motionMode == 3) { writeRightPwm(true);  }                      // M3 Curve Left
-    else if (motionMode == 4) { writeLeftPwm(true);   }                      // M4 Curve Right
-    else if (motionMode == 5) { writeRightPwm(true);  writeLeftPwm(false); } // M5 Rotate Left (Right -> Left)
-    else if (motionMode == 6) { writeRightPwm(false); writeLeftPwm(true);  } // M6 Rotate Right (Right -> Left)
-    else if (motionMode == 7) { writeRightPwm(false); }                      // Curve Left Back
-    else if (motionMode == 8) { writeLeftPwm(false);  }                      // Curve Right Back
+    if      (motionMode == 1) { writeLeftPwm(true);  writeRightPwm(true);  } // M1 Forward[cite: 3]
+    else if (motionMode == 2) { writeLeftPwm(false); writeRightPwm(false); } // M2 Backward[cite: 3]
+    else if (motionMode == 3) { writeRightPwm(true);  }                      // M3 Curve Left[cite: 3]
+    else if (motionMode == 4) { writeLeftPwm(true);   }                      // M4 Curve Right[cite: 3]
+    else if (motionMode == 5) { writeLeftPwm(false); writeRightPwm(true);  } // M5 Rotate Left[cite: 3]
+    else if (motionMode == 6) { writeLeftPwm(true);  writeRightPwm(false); } // M6 Rotate Right[cite: 3]
+    else if (motionMode == 7) { writeRightPwm(false); }                      // Curve Left Back[cite: 3]
+    else if (motionMode == 8) { writeLeftPwm(false);  }                      // Curve Right Back[cite: 3]
 }
 
 void updateAccelDecel(){
     stepTickCounter++;
-    if (stepTickCounter < PWM_STEP_TICKS) return; // Wait until PWM_STEP_TICKS pass
+    if (stepTickCounter < PWM_STEP_TICKS) return;
     stepTickCounter = 0;
 
-    if (remainingTicks > DECEL_REMAIN_TICKS) {
-        // Acceleration Phase (+20 PWM per step up to target speed: Right -> Left)
-        if (currentRightPwm < RIGHT_PWM_SPEED) {
-            currentRightPwm += PWM_STEP_SIZE;
-            if (currentRightPwm > RIGHT_PWM_SPEED) currentRightPwm = RIGHT_PWM_SPEED;
-        }
+    // ------------------------------------------------------------------------
+    // 1. LEFT TRACK (BTS7960) Independent Accel / Decel
+    // ------------------------------------------------------------------------
+    if (remainingTicks > LEFT_DECEL_TICKS) {
         if (currentLeftPwm < LEFT_PWM_SPEED) {
-            currentLeftPwm += PWM_STEP_SIZE;
+            currentLeftPwm += LEFT_ACCEL_STEP;
             if (currentLeftPwm > LEFT_PWM_SPEED) currentLeftPwm = LEFT_PWM_SPEED;
         }
     } else {
-        // Deceleration Phase (-20 PWM per step down to START_PWM_SPEED: Right -> Left)
-        if (currentRightPwm > START_PWM_SPEED) {
-            currentRightPwm -= PWM_STEP_SIZE;
-            if (currentRightPwm < START_PWM_SPEED) currentRightPwm = START_PWM_SPEED;
+        if (currentLeftPwm > LEFT_START_PWM) {
+            currentLeftPwm -= LEFT_DECEL_STEP;
+            if (currentLeftPwm < LEFT_START_PWM) currentLeftPwm = LEFT_START_PWM;
         }
-        if (currentLeftPwm > START_PWM_SPEED) {
-            currentLeftPwm -= PWM_STEP_SIZE;
-            if (currentLeftPwm < START_PWM_SPEED) currentLeftPwm = START_PWM_SPEED;
+    }
+
+    // ------------------------------------------------------------------------
+    // 2. RIGHT TRACK (IRFB3306) Independent Accel / Decel
+    // ------------------------------------------------------------------------
+    if (remainingTicks > RIGHT_DECEL_TICKS) {
+        if (currentRightPwm < RIGHT_PWM_SPEED) {
+            currentRightPwm += RIGHT_ACCEL_STEP;
+            if (currentRightPwm > RIGHT_PWM_SPEED) currentRightPwm = RIGHT_PWM_SPEED;
+        }
+    } else {
+        if (currentRightPwm > RIGHT_START_PWM) {
+            currentRightPwm -= RIGHT_DECEL_STEP;
+            if (currentRightPwm < RIGHT_START_PWM) currentRightPwm = RIGHT_START_PWM;
         }
     }
 
@@ -191,7 +203,7 @@ void updateAccelDecel(){
 #endif
 
 // ============================================================================
-// @section High-Level Motion Primitives (M1 - M6 | Right -> Left Execution)
+// @section High-Level Motion Primitives (M1 - M6)
 // ============================================================================
 
 void moveForward(int amount){
@@ -203,16 +215,16 @@ void moveForward(int amount){
             useAccelDecel   = true;
             motionMode      = 1;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
-            currentLeftPwm  = (LEFT_PWM_SPEED  > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
+            currentLeftPwm  = (LEFT_PWM_SPEED  > LEFT_START_PWM)  ? LEFT_START_PWM  : LEFT_PWM_SPEED;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
         useAccelDecel = false;
     #endif
 
-    moveRightTrackForward();
     moveLeftTrackForward();
+    moveRightTrackForward();
 }
 
 void moveBackward(int amount){
@@ -223,16 +235,16 @@ void moveBackward(int amount){
             useAccelDecel   = true;
             motionMode      = 2;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
-            currentLeftPwm  = (LEFT_PWM_SPEED  > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
+            currentLeftPwm  = (LEFT_PWM_SPEED  > LEFT_START_PWM)  ? LEFT_START_PWM  : LEFT_PWM_SPEED;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
         useAccelDecel = false;
     #endif
 
-    moveRightTrackBackward();
     moveLeftTrackBackward();
+    moveRightTrackBackward();
 }
 
 void curveLeft(int amount){
@@ -243,8 +255,8 @@ void curveLeft(int amount){
             useAccelDecel   = true;
             motionMode      = 3;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
             currentLeftPwm  = 0;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
@@ -262,8 +274,8 @@ void curveRight(int amount){
             useAccelDecel   = true;
             motionMode      = 4;
             stepTickCounter = 0;
+            currentLeftPwm  = (LEFT_PWM_SPEED > LEFT_START_PWM) ? LEFT_START_PWM : LEFT_PWM_SPEED;
             currentRightPwm = 0;
-            currentLeftPwm  = (LEFT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
@@ -281,16 +293,16 @@ void rotateLeft(int amount){
             useAccelDecel   = true;
             motionMode      = 5;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
-            currentLeftPwm  = (LEFT_PWM_SPEED  > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
+            currentLeftPwm  = (LEFT_PWM_SPEED  > LEFT_START_PWM)  ? LEFT_START_PWM  : LEFT_PWM_SPEED;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
         useAccelDecel = false;
     #endif
 
-    moveRightTrackForward();
     moveLeftTrackBackward();
+    moveRightTrackForward();
 }
 
 void rotateRight(int amount){
@@ -301,16 +313,16 @@ void rotateRight(int amount){
             useAccelDecel   = true;
             motionMode      = 6;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
-            currentLeftPwm  = (LEFT_PWM_SPEED  > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
+            currentLeftPwm  = (LEFT_PWM_SPEED  > LEFT_START_PWM)  ? LEFT_START_PWM  : LEFT_PWM_SPEED;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
         useAccelDecel = false;
     #endif
 
-    moveRightTrackBackward();
     moveLeftTrackForward();
+    moveRightTrackBackward();
 }
 
 void curveLeftBack(int amount){
@@ -321,8 +333,8 @@ void curveLeftBack(int amount){
             useAccelDecel   = true;
             motionMode      = 7;
             stepTickCounter = 0;
-            currentRightPwm = (RIGHT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : RIGHT_PWM_SPEED;
             currentLeftPwm  = 0;
+            currentRightPwm = (RIGHT_PWM_SPEED > RIGHT_START_PWM) ? RIGHT_START_PWM : RIGHT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
@@ -340,8 +352,8 @@ void curveRightBack(int amount){
             useAccelDecel   = true;
             motionMode      = 8;
             stepTickCounter = 0;
+            currentLeftPwm  = (LEFT_PWM_SPEED > LEFT_START_PWM) ? LEFT_START_PWM : LEFT_PWM_SPEED;
             currentRightPwm = 0;
-            currentLeftPwm  = (LEFT_PWM_SPEED > START_PWM_SPEED) ? START_PWM_SPEED : LEFT_PWM_SPEED;
             applyAccelDecelOutput();
             return;
         }
@@ -352,21 +364,21 @@ void curveRightBack(int amount){
 }
 
 // ============================================================================
-// @section Emergency Stop & Hard Brake (Right -> Left Cutoff)
+// @section Emergency Stop & Hard Brake
 // ============================================================================
 
 void halt(){
-    analogWrite(RIGHT_LPWM_PIN, 0);
-    analogWrite(RIGHT_RPWM_PIN, 0);
     analogWrite(LEFT_LPWM_PIN, 0);
     analogWrite(LEFT_RPWM_PIN, 0);
+    analogWrite(RIGHT_LPWM_PIN, 0);
+    analogWrite(RIGHT_RPWM_PIN, 0);
 
     #ifdef ENABLE_ACCEL_DECEL
         useAccelDecel   = false;
         motionMode      = 0;
         stepTickCounter = 0;
-        currentRightPwm = 0;
         currentLeftPwm  = 0;
+        currentRightPwm = 0;
     #endif
 }
 
@@ -375,7 +387,7 @@ void halt(){
 //--------------------------------------------------------------------------
 void updateMotion(){
     if (remainingTicks > 0) {
-        remainingTicks--; // Decrement by 1 every 2ms tick
+        remainingTicks--; // Decrement by 1 every 2ms tick[cite: 2]
         //Serial.println(remainingTicks);
 
         #ifdef ENABLE_ACCEL_DECEL
@@ -385,8 +397,8 @@ void updateMotion(){
         #endif
 
         if (remainingTicks == 0) {
-            halt(); // Time's up! Stop Right first, then Left immediately.
-            Serial.println("ok"); //OK when something is done so Q6A can get that feedback
+            halt(); // Time's up! Stop all motors immediately.
+            Serial.println("ok"); //OK when something is done so Q6A can get that feedback[cite: 2]
         }
     }
 }
