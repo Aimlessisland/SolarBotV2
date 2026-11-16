@@ -44,11 +44,11 @@
 #define LEFT_DECEL_STEP     10   // -10 PWM per step (smaller = slower, softer off)
 #define LEFT_DECEL_TICKS    140  // Start slowing Left track 140 ticks (~280ms) before 0[cite: 2]
 
-// --- RIGHT TRACK TUNING (IRFB3306 + Relay - Earlier Cutoff to Match BTS7960) ---
+// --- RIGHT TRACK TUNING (IRFB3306 + Relay - Slightly Earlier Cutoff) ---
 #define RIGHT_START_PWM     30   // Keep at 30 so your forward launch stays identical
 #define RIGHT_ACCEL_STEP    20   // +20 PWM per step during acceleration
 #define RIGHT_DECEL_STEP    25   // -25 PWM per step (drops PWM quickly)
-#define RIGHT_DECEL_TICKS   110  // Start slowing Right track 110 ticks (~220ms) before 0 (was 60)
+#define RIGHT_DECEL_TICKS   125  // Increased from 110 -> ~30ms earlier right slowdown
 
 // ============================================================================
 // @section State Variables & Timers
