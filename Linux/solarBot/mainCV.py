@@ -377,7 +377,7 @@ def decide_movement(telem):
     TARGET_OFFSET = 46.0           # Matches your calibrated straight baseline
     LANE_GAIN = 0.85               # Strong pull back to the +46px rail
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
-    STEP_DURATION = 220            # Shorter smooth step (>150 keeps accel/decel, checks twice as often)
+    STEP_DURATION = 300            # Shorter smooth step (>150 keeps accel/decel, checks twice as often)
     MICRO_TURN_DURATION = 75       # <=150 bypasses ramp for crisp 1-2 degree micro-nudges
     HARD_TURN_DURATION = 200       # >150 uses smooth ramp for big recovery turns
     MAX_BLIND_APPROACH_STEPS = 2
