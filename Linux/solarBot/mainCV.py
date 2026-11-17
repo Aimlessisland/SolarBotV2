@@ -373,13 +373,14 @@ def outputImage(traced_image, image_path):
 def decide_movement(telem):
     global blind_approach_steps
 
-    DEADZONE = 10.0                # Combined error threshold before steering
-    TARGET_OFFSET = 50.0           # Ideal calibrated lane offset (px)
-    LANE_GAIN = 0.75               # How strongly sideways shift pulls steering
+    DEADZONE = 6.0                 # Tight tolerance (catches drift early)
+    TARGET_OFFSET = 46.0           # Matches your calibrated straight baseline
+    LANE_GAIN = 0.85               # Strong pull back to the +46px rail
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
-    STEP_DURATION = 400            # Forward pulse duration (ms)
-    TURN_DURATION = 220            # Turn pulse duration (ms)
-    MAX_BLIND_APPROACH_STEPS = 2   # Max forward pulses if left line ends before front line appears
+    STEP_DURATION = 220            # Shorter smooth step (>150 keeps accel/decel, checks twice as often)
+    MICRO_TURN_DURATION = 75       # <=150 bypasses ramp for crisp 1-2 degree micro-nudges
+    HARD_TURN_DURATION = 200       # >150 uses smooth ramp for big recovery turns
+    MAX_BLIND_APPROACH_STEPS = 2
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -402,7 +403,6 @@ def decide_movement(telem):
 
     # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE STILL DETECTED AHEAD -> KEEP GOING
-    # (Overrides any early front-edge false positives!)
     # ----------------------------------------------------------
     if has_far_left and valid_count >= 4:
         blind_approach_steps = 0
@@ -415,15 +415,57 @@ def decide_movement(telem):
 
         print(f"[LANE CHECK] Angle={angle_error:+.1f}px | LaneShift={lane_error:+.1f}px | TotalError={total_error:+.1f}px")
 
-        if total_error > DEADZONE:
-            print(f"[PRIORITY 1] Correct Right (Total={total_error:+.1f}px) -> M4 {TURN_DURATION}")
-            return f"M4 {TURN_DURATION}", False
-        elif total_error < -DEADZONE:
-            print(f"[PRIORITY 1] Correct Left (Total={total_error:+.1f}px) -> M3 {TURN_DURATION}")
-            return f"M3 {TURN_DURATION}", False
+        if abs(total_error) > DEADZONE:
+            turn_ticks = HARD_TURN_DURATION if abs(total_error) > 20.0 else MICRO_TURN_DURATION
+            if total_error > 0:
+                print(f"[PRIORITY 1] Correct Right (Total={total_error:+.1f}px) -> M4 {turn_ticks}")
+                return f"M4 {turn_ticks}", False
+            else:
+                print(f"[PRIORITY 1] Correct Left (Total={total_error:+.1f}px) -> M3 {turn_ticks}")
+                return f"M3 {turn_ticks}", False
         else:
-            print(f"[PRIORITY 1] Centered & Straight (Total={total_error:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
+            print(f"[PRIORITY 1] Locked on Rail (Total={total_error:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
+
+    # ----------------------------------------------------------
+    # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
+    # ----------------------------------------------------------
+    if is_left_valid and not has_far_left:
+        if front_cm is not None:
+            blind_approach_steps = 0
+            if front_cm <= STOP_EDGE_CM:
+                print(
+                    f"[PRIORITY 2 - STOP] Left line ended (Y={left_end_y} px) & Front edge is close "
+                    f"({front_cm:.1f} cm <= {STOP_EDGE_CM} cm, Front Y={front_y} px) -> EDGE DETECTED, STOP MOVING!"
+                )
+                return None, True
+            else:
+                print(
+                    f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
+                    f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
+                )
+                return f"M1 {STEP_DURATION}", False
+        else:
+            if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
+                blind_approach_steps += 1
+                print(
+                    f"[PRIORITY 2 - CORNER APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
+                    f"Left line ended at {left_end_cm} cm, scanning for front line -> Step Forward (M1 {STEP_DURATION})"
+                )
+                return f"M1 {STEP_DURATION}", False
+            else:
+                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
+                return None, True
+
+    # ----------------------------------------------------------
+    # SAFETY FALLBACK: LEFT LINE COMPLETELY LOST -> STOP!
+    # ----------------------------------------------------------
+    if front_cm is not None and front_cm <= STOP_EDGE_CM:
+        print(f"[PRIORITY 2 - STOP] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) -> STOP MOVING!")
+        return None, True
+
+    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
+    return None, True
 
     # ----------------------------------------------------------
     # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
