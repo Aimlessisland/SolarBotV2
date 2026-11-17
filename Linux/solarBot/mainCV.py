@@ -154,7 +154,7 @@ def process_and_trace():
     def leftTracking():
         print("\n--- [PRIORITY 1: LEFT LINE SCAN REPORT] ---")
         left_perspective_corrections = {
-            65: -24,
+            65: -5,
             60: -5,
             55: -6,
             50: -7,
