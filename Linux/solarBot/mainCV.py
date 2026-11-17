@@ -373,13 +373,16 @@ def outputImage(traced_image, image_path):
 def decide_movement(telem):
     global blind_approach_steps
 
-    DEADZONE = 6.0                 # Tight tolerance (catches drift early)
-    TARGET_OFFSET = 46.0           # Matches your calibrated straight baseline
-    LANE_GAIN = 0.85               # Strong pull back to the +46px rail
+    # --- Calibrated Safe Lane Range (45px inner baseline <-> 78px outer hand-sample) ---
+    SAFE_LANE_MIN = 44.0           # Inner limit (near left tape)
+    SAFE_LANE_MAX = 80.0           # Outer limit (hand-sampled riding-on-line limit)
+    TARGET_OFFSET = 62.0           # Midpoint of [44px .. 80px] safe lane
+    DEADZONE = 18.0                # Allows full 44px..80px band + minor tilt before steering
+    LANE_GAIN = 1.0                # 1:1 pixel weight so crossing 44px or 80px triggers immediately
     STOP_EDGE_CM = 10.0            # Stop margin from front edge
-    STEP_DURATION = 300            # Shorter smooth step (>150 keeps accel/decel, checks twice as often)
-    MICRO_TURN_DURATION = 75       # <=150 bypasses ramp for crisp 1-2 degree micro-nudges
-    HARD_TURN_DURATION = 200       # >150 uses smooth ramp for big recovery turns
+    STEP_DURATION = 300            # Forward stride ticks (>150 uses smooth accel/decel)
+    MICRO_TURN_DURATION = 75       # <=150 bypasses ramp for crisp 1-2 deg micro-nudges[cite: 4]
+    HARD_TURN_DURATION = 200       # >150 uses smooth ramp for big recovery turns[cite: 4]
     MAX_BLIND_APPROACH_STEPS = 2
 
     is_left_valid = telem["is_left_valid"]
@@ -397,7 +400,7 @@ def decide_movement(telem):
     print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} continuous pts)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
     print(f"  [P1] Left Lean       : {left_lean} px")
-    print(f"  [P1] Near Offset     : {near_offset} px (Target: {TARGET_OFFSET} px)")
+    print(f"  [P1] Near Offset     : {near_offset} px (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
     print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
     print("=" * 55)
 
@@ -413,18 +416,19 @@ def decide_movement(telem):
         angle_error = left_lean if left_lean is not None else 0.0
         total_error = angle_error + (LANE_GAIN * lane_error)
 
-        print(f"[LANE CHECK] Angle={angle_error:+.1f}px | LaneShift={lane_error:+.1f}px | TotalError={total_error:+.1f}px")
+        in_safe_band = (near_offset is None) or (SAFE_LANE_MIN <= near_offset <= SAFE_LANE_MAX)
+        print(f"[LANE CHECK] Offset={near_offset}px (InBand={in_safe_band}) | Angle={angle_error:+.1f}px | TotalError={total_error:+.1f}px")
 
         if abs(total_error) > DEADZONE:
-            turn_ticks = HARD_TURN_DURATION if abs(total_error) > 20.0 else MICRO_TURN_DURATION
+            turn_ticks = HARD_TURN_DURATION if abs(total_error) > 28.0 else MICRO_TURN_DURATION
             if total_error > 0:
-                print(f"[PRIORITY 1] Correct Right (Total={total_error:+.1f}px) -> M4 {turn_ticks}")
+                print(f"[PRIORITY 1] Outside Safe Lane -> Steer Right (Total={total_error:+.1f}px) -> M4 {turn_ticks}")
                 return f"M4 {turn_ticks}", False
             else:
-                print(f"[PRIORITY 1] Correct Left (Total={total_error:+.1f}px) -> M3 {turn_ticks}")
+                print(f"[PRIORITY 1] Outside Safe Lane -> Steer Left (Total={total_error:+.1f}px) -> M3 {turn_ticks}")
                 return f"M3 {turn_ticks}", False
         else:
-            print(f"[PRIORITY 1] Locked on Rail (Total={total_error:+.1f}px) -> Step Forward (M1 {STEP_DURATION})")
+            print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
