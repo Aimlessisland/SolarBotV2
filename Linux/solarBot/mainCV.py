@@ -19,7 +19,8 @@ BAUD_RATE = 115200
 
 serial_lock = threading.Lock()
 blind_approach_steps = 0
-
+corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE"
+corner_rotate_steps = 0
 
 def connect_port():
     try:
@@ -368,22 +369,24 @@ def outputImage(traced_image, image_path):
 
 
 # ==========================================================
-# DECISION ARBITRATION (PRIORITY 1: LEFT -> PRIORITY 2: FRONT)
+# DECISION ARBITRATION (PRIORITY 1: LEFT -> PRIORITY 2: FRONT -> CORNER TURN)
 # ==========================================================
 def decide_movement(telem):
-    global blind_approach_steps
+    global blind_approach_steps, corner_state, corner_rotate_steps
 
-    # --- Calibrated Safe Lane Range (45px inner baseline <-> 78px outer hand-sample) ---
+    # --- Calibrated Safe Lane Range ---
     SAFE_LANE_MIN = 44.0           # Inner limit (near left tape)
-    SAFE_LANE_MAX = 80.0           # Outer limit (hand-sampled riding-on-line limit)
+    SAFE_LANE_MAX = 80.0           # Outer limit (riding-on-line limit)
     TARGET_OFFSET = 62.0           # Midpoint of [44px .. 80px] safe lane
     DEADZONE = 18.0                # Allows full 44px..80px band + minor tilt before steering
-    LANE_GAIN = 1.0                # 1:1 pixel weight so crossing 44px or 80px triggers immediately
-    STOP_EDGE_CM = 10.0            # Stop margin from front edge
-    STEP_DURATION = 300            # Forward stride ticks (>150 uses smooth accel/decel)
-    MICRO_TURN_DURATION = 75       # <=150 bypasses ramp for crisp 1-2 deg micro-nudges[cite: 4]
-    HARD_TURN_DURATION = 200       # >150 uses smooth ramp for big recovery turns[cite: 4]
+    LANE_GAIN = 1.0
+    STOP_EDGE_CM = 10.0            # Trigger corner sequence when front edge <= 10.0 cm
+    SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance (like 14.4cm test) required BEFORE rotating
+    STEP_DURATION = 300
+    MICRO_TURN_DURATION = 75
+    HARD_TURN_DURATION = 200
     MAX_BLIND_APPROACH_STEPS = 2
+    MAX_CORNER_ROTATE_STEPS = 12   # Safety cap so it never spins endlessly if no new edge exists
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -396,13 +399,68 @@ def decide_movement(telem):
     front_y = telem["front_y"]
 
     print("\n" + "=" * 55)
-    print("TELEMETRY SUMMARY:")
+    print(f"TELEMETRY SUMMARY [STATE: {corner_state}]:")
     print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} continuous pts)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
     print(f"  [P1] Left Lean       : {left_lean} px")
     print(f"  [P1] Near Offset     : {near_offset} px (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
     print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
     print("=" * 55)
+
+    # ----------------------------------------------------------
+    # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm)
+    # ----------------------------------------------------------
+    if corner_state == "CORNER_BACKUP":
+        if front_cm is not None and front_cm >= SAFE_ROTATE_CLEARANCE_CM:
+            print(
+                f"[CORNER CLEARANCE OK] Front edge at {front_cm:.1f} cm (>= {SAFE_ROTATE_CLEARANCE_CM} cm) "
+                f"-> Safe to pivot! Kickoff Rotate Right (M6 900)"
+            )
+            corner_state = "CORNER_ROTATE"
+            corner_rotate_steps = 1
+            return "M6 900", False
+        elif front_cm is not None and front_cm < SAFE_ROTATE_CLEARANCE_CM:
+            print(
+                f"[CORNER BACKUP RETRY] Front edge only {front_cm:.1f} cm (< {SAFE_ROTATE_CLEARANCE_CM} cm) "
+                f"-> Backing up more for safety (M2 200)"
+            )
+            return "M2 200", False
+        else:
+            # Front edge moved out of top of frame (> 65 cm away) -> plenty of clearance
+            print("[CORNER CLEARANCE OK] Front edge cleared frame -> Kickoff Rotate Right (M6 900)")
+            corner_state = "CORNER_ROTATE"
+            corner_rotate_steps = 1
+            return "M6 900", False
+
+    # ----------------------------------------------------------
+    # CORNER STATE 2: SLOW CLOSED-LOOP M6 PIVOT UNTIL NEW LINE LOCKS
+    # ----------------------------------------------------------
+    if corner_state == "CORNER_ROTATE":
+        new_line_straight = (left_lean is not None and abs(left_lean) <= 15.0)
+        new_line_in_lane = (near_offset is not None and 35.0 <= near_offset <= 90.0)
+
+        if has_far_left and valid_count >= 5 and new_line_straight and new_line_in_lane:
+            print(
+                f"[CORNER TURN COMPLETE] Locked onto new left edge! "
+                f"(Offset={near_offset}px, Lean={left_lean:+.1f}px) -> Resume Forward (M1 {STEP_DURATION})"
+            )
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
+            blind_approach_steps = 0
+            return f"M1 {STEP_DURATION}", False
+
+        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
+            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) without locking new edge -> STOP!")
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
+            return None, True
+
+        corner_rotate_steps += 1
+        print(
+            f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
+            f"Searching for new left edge (Valid={valid_count}, Far={has_far_left}, Lean={left_lean}, Offset={near_offset}) -> M6 250"
+        )
+        return "M6 250", False
 
     # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE STILL DETECTED AHEAD -> KEEP GOING
@@ -439,10 +497,11 @@ def decide_movement(telem):
             blind_approach_steps = 0
             if front_cm <= STOP_EDGE_CM:
                 print(
-                    f"[PRIORITY 2 - STOP] Left line ended (Y={left_end_y} px) & Front edge is close "
-                    f"({front_cm:.1f} cm <= {STOP_EDGE_CM} cm, Front Y={front_y} px) -> EDGE DETECTED, STOP MOVING!"
+                    f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+                    f"-> Backing up for safe clearance (M2 300)"
                 )
-                return None, True
+                corner_state = "CORNER_BACKUP"
+                return "M2 300", False
             else:
                 print(
                     f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
@@ -462,51 +521,15 @@ def decide_movement(telem):
                 return None, True
 
     # ----------------------------------------------------------
-    # SAFETY FALLBACK: LEFT LINE COMPLETELY LOST -> STOP!
+    # SAFETY FALLBACK: FRONT EDGE REACHED EVEN IF LEFT PTS < 2
     # ----------------------------------------------------------
     if front_cm is not None and front_cm <= STOP_EDGE_CM:
-        print(f"[PRIORITY 2 - STOP] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) -> STOP MOVING!")
-        return None, True
-
-    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
-    return None, True
-
-    # ----------------------------------------------------------
-    # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
-    # ----------------------------------------------------------
-    if is_left_valid and not has_far_left:
-        if front_cm is not None:
-            blind_approach_steps = 0
-            if front_cm <= STOP_EDGE_CM:
-                print(
-                    f"[PRIORITY 2 - STOP] Left line ended (Y={left_end_y} px) & Front edge is close "
-                    f"({front_cm:.1f} cm <= {STOP_EDGE_CM} cm, Front Y={front_y} px) -> EDGE DETECTED, STOP MOVING!"
-                )
-                return None, True
-            else:
-                print(
-                    f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
-                    f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
-        else:
-            if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
-                blind_approach_steps += 1
-                print(
-                    f"[PRIORITY 2 - CORNER APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
-                    f"Left line ended at {left_end_cm} cm, scanning for front line -> Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
-                return None, True
-
-    # ----------------------------------------------------------
-    # SAFETY FALLBACK: LEFT LINE COMPLETELY LOST -> STOP!
-    # ----------------------------------------------------------
-    if front_cm is not None and front_cm <= STOP_EDGE_CM:
-        print(f"[PRIORITY 2 - STOP] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) -> STOP MOVING!")
-        return None, True
+        print(
+            f"[PRIORITY 2 - CORNER DETECTED] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) "
+            f"-> Backing up for safe clearance (M2 300)"
+        )
+        corner_state = "CORNER_BACKUP"
+        return "M2 300", False
 
     print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
     return None, True
@@ -516,8 +539,10 @@ def decide_movement(telem):
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
-    global blind_approach_steps
+    global blind_approach_steps, corner_state, corner_rotate_steps
     blind_approach_steps = 0
+    corner_state = "NORMAL"
+    corner_rotate_steps = 0
 
     print("\n==========================================")
     print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
