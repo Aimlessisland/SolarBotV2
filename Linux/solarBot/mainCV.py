@@ -171,7 +171,7 @@ def process_and_trace():
             10: -35,
             5:  -38
         }
-        MAX_OFFSET_JUMP_PX = 24 if wide_search else 20
+        MAX_OFFSET_JUMP_PX = 55 if wide_search else 20
 
         left_pts = left_curve.reshape(-1, 2)
         left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
@@ -426,6 +426,16 @@ def decide_movement(telem):
     # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 800 KICKOFF
     # ----------------------------------------------------------
     if corner_state == "CORNER_BACKUP":
+        # Safeguard: If backing up reveals the left boundary actually continues past the seam, cancel turn!
+        if has_far_left and valid_count >= 8:
+            print(
+                f"[CORNER ABORTED - SEAM DETECTED] Left line continues to {left_end_cm} cm ({valid_count} pts) "
+                f"-> Cancel turn & Resume Forward (M1 {STEP_DURATION})"
+            )
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
+            return f"M1 {STEP_DURATION}", False
+
         if front_cm is None or front_cm >= SAFE_ROTATE_CLEARANCE_CM:
             dist_str = f"{front_cm:.1f} cm" if front_cm is not None else "cleared frame"
             print(
@@ -481,9 +491,10 @@ def decide_movement(telem):
         if front_cm is not None and front_cm > STOP_EDGE_CM:
             print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
 
-        if front_cm is not None and front_cm <= STOP_EDGE_CM and not has_far_left:
+        # Only trigger corner turn if front edge <= 10cm AND left line truly ends near the corner (<= 25cm)
+        if front_cm is not None and front_cm <= STOP_EDGE_CM and (left_end_cm is not None and left_end_cm <= 25):
             print(
-                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm & Left ends at {left_end_cm} cm "
                 f"-> Backing up for safe clearance (M2 300)"
             )
             corner_state = "CORNER_BACKUP"
@@ -507,7 +518,7 @@ def decide_movement(telem):
         else:
             print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
-
+            
     # ----------------------------------------------------------
     # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
     # ----------------------------------------------------------
