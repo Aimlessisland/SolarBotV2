@@ -8,8 +8,9 @@ import cv2
 import numpy as np
 import serial
 
-# Uncomment when capturing live from USB camera on the Radxa board:
 import captureImg
+# Tuned Up reference are forward 65 width 71 as brush the rest of parameter let god design
+# May peace be with you!
 
 OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
@@ -25,7 +26,7 @@ corner_rotate_steps = 0
 def connect_port():
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        time.sleep(2)  # One-time Arduino reset settle[cite: 2]
+        time.sleep(2)  # One-time Arduino Uno reset settle[cite: 2]
         ser.reset_input_buffer()
         print(f"[CONNECTED] {SERIAL_PORT} @ {BAUD_RATE} ready!")
         return ser
@@ -38,11 +39,8 @@ def connect_port():
 # COMMAND DISPATCHER (THREAD-SAFE FOR KEYBOARD + WEB)
 # ==========================================================
 def send_command(ser, command):
-    """Sends command over serial and waits for Arduino 'ok'[cite: 2]."""
+    """Sends command over serial and waits for Arduino 'OK'[cite: 2]."""
     with serial_lock:
-        if command is None:
-            return False
-
         if ser is None:
             print(f"\n>>> [OFFLINE] COMMAND ISSUED: {command} <<<\n")
             return False
@@ -52,7 +50,7 @@ def send_command(ser, command):
         print(f">>> SENT: {command}")
 
         start = time.time()
-        while time.time() - start < 5.0:
+        while time.time() - start < 3.0:
             if ser.in_waiting > 0:
                 line = ser.readline().decode("utf-8", errors="ignore").strip()
                 if line:
@@ -94,7 +92,8 @@ def process_and_trace():
         list_of_images = glob.glob(os.path.join(FORWARD_DIR, "front_*.png"))
 
     if not list_of_images:
-        print(f"\n[ERROR] No 'front_*.jpg' images found in '{FORWARD_DIR}'!\n")
+        print(f"\n[ERROR] No 'front_*.jpg' images found in '{FORWARD_DIR}'!")
+        print(f"Please drop your image (e.g., front_0001.jpg) into '{FORWARD_DIR}' and try again.\n")
         return None, None, None
 
     latest_image_path = max(list_of_images, key=os.path.getmtime)
@@ -129,9 +128,12 @@ def process_and_trace():
     front_y_base = int(h * 0.165) + 5
     front_curve_depth = -15
 
-    front_left = (int(w * 0.300), front_y_base)
+    front_left_mult = 0.300
+    front_right_mult = 0.665
+
+    front_left = (int(w * front_left_mult), front_y_base)
     front_mid = (int(w * cx_ratio), front_y_base + front_curve_depth)
-    front_right = (int(w * 0.665), front_y_base)
+    front_right = (int(w * front_right_mult), front_y_base)
 
     left_curve = fit_curve_3pts(left_top, left_mid, left_bot, axis="x_along_y")
     right_curve = fit_curve_3pts(right_top, right_mid, right_bot, axis="x_along_y")
@@ -145,30 +147,41 @@ def process_and_trace():
     masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
     traced_image = cv2.cvtColor(masked_edges, cv2.COLOR_GRAY2BGR)
 
-    cm_calib = np.array([65,    60,  55,    50,  45,    40,  35,  30,  25,  20,  15,  10,  5,   0], dtype=float)
-    y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630, 720, 760], dtype=float)
+    cm_calib = np.array([65,   60,   55,   50,   45,   40,   35,   30,   25,   20,   15,   10,   5,    0   ], dtype=float)
+    y_calib  = np.array([215.5, 240,  254.5, 280,  300.5, 340,  375,  410,  438,  496,  553,  630,  720,  760  ], dtype=float)
 
     # ==========================================================
-    # 3A. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION)
+    # 3. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION)
     # ==========================================================
     def leftTracking(wide_search=False):
         mode_tag = "WIDE ROTATION SCAN" if wide_search else "NORMAL LANE SCAN"
         print(f"\n--- [PRIORITY 1: LEFT LINE SCAN REPORT ({mode_tag})] ---")
         left_perspective_corrections = {
-            65: -10, 60: -11, 55: -12, 50: -13, 45: -14, 40: -16, 35: -20, 30: -20,
-            25: -21, 20: -24, 15: -27, 10: -32, 5:  -36
+            65: -5,
+            60: -5,
+            55: -6,
+            50: -7,
+            45: -7,
+            40: -10,
+            35: -13,
+            30: -15,
+            25: -19,
+            20: -23,
+            15: -28,
+            10: -35,
+            5:  -38
         }
+        MAX_OFFSET_JUMP_PX = 24 if wide_search else 20
+
         left_pts = left_curve.reshape(-1, 2)
         left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
 
         detected_points = []
         offsets_by_cm = {}
         prev_calibrated_px = None
-        left_end_y = None
-        left_end_cm = None
 
-        # Scan bottom-to-top (5 cm up to 65 cm) for continuous segment tracking
-        for cm in cm_calib[:-1][::-1]:
+        # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)[cite: 2]
+        for cm in reversed(cm_calib[:-1]):
             cm_key = int(cm)
             base_y = np.interp(cm, cm_calib[::-1], y_calib[::-1])
             target_y = int(base_y)
@@ -190,19 +203,17 @@ def process_and_trace():
                 correction = left_perspective_corrections.get(cm_key, 0)
                 calibrated_px = raw_px + correction
 
-                # Reject sudden horizontal jumps (> 24 px) from continuous segment
-                if prev_calibrated_px is not None and abs(calibrated_px - prev_calibrated_px) > 24:
+                # Continuity check against previous valid point below it[cite: 2]
+                if prev_calibrated_px is not None and abs(calibrated_px - prev_calibrated_px) > MAX_OFFSET_JUMP_PX:
                     print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED jump ({calibrated_px:+4d}px vs prev {prev_calibrated_px:+4d}px)")
                     continue
 
                 prev_calibrated_px = calibrated_px
                 offsets_by_cm[cm_key] = calibrated_px
                 detected_points.append((edge_x, target_y))
-                left_end_y = target_y
-                left_end_cm = cm_key
-
                 cv2.circle(traced_image, (edge_x, target_y), 3, (0, 0, 255), -1)
                 cv2.line(traced_image, (left_x, target_y), (edge_x, target_y), (0, 0, 255), 1)
+
                 print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | BaseX={left_x:3d} -> EdgeX={edge_x:3d} | Raw={raw_px:+4d}px | Offset={calibrated_px:+4d}px")
             else:
                 print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | (No white pixels detected in window)")
@@ -211,7 +222,7 @@ def process_and_trace():
             pts_array = np.array(detected_points, dtype=np.int32).reshape((-1, 1, 2))
             cv2.polylines(traced_image, [pts_array], isClosed=False, color=(0, 0, 255), thickness=2)
 
-        # Symmetrical Pairings + Short-Line Fallback Slope
+        # 5-Point Symmetrical Pairings + Short-Line Slope Fallback
         pairs = [(65, 5), (60, 10), (55, 15), (50, 20), (45, 25)]
         pair_deltas = []
         for f, n in pairs:
@@ -227,35 +238,39 @@ def process_and_trace():
             sorted_cms = sorted(offsets_by_cm.keys())
             lean_value = round(float(offsets_by_cm[sorted_cms[-1]] - offsets_by_cm[sorted_cms[0]]), 1)
 
-        near_vals = [offsets_by_cm[k] for k in (5, 10, 15, 20, 25) if k in offsets_by_cm]
-        near_offset = round(float(np.median(near_vals)), 1) if near_vals else None
-
         valid_count = len(offsets_by_cm)
-        is_left_valid = valid_count >= 2
+        near_offsets = [offsets_by_cm[cm_k] for cm_k in offsets_by_cm if cm_k <= 25]
+        near_count = len(near_offsets)
+        near_offset = round(float(np.median(near_offsets)), 1) if near_count > 0 else None
+        has_near_left = (near_count >= 2)
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
+        is_left_valid = (valid_count >= 4) or has_near_left
+
+        # Topmost point where left line stops (detected_points is bottom-to-top, so [-1] is topmost)[cite: 2]
+        left_end_y = detected_points[-1][1] if len(detected_points) > 0 else None
+        left_end_cm = max(offsets_by_cm.keys()) if len(offsets_by_cm) > 0 else None
 
         print(
-            f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {len(near_vals)} near) | "
-            f"Far Alive: {has_far_left} | Lean: {lean_value} px | Near Offset: {near_offset} px | "
-            f"Ends at Y={left_end_y} px ({left_end_cm} cm)"
+            f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {near_count} near) | "
+            f"Far Alive: {has_far_left} | Lean: {lean_value} px | Near Offset: {near_offset} px | Ends at Y={left_end_y} px ({left_end_cm} cm)"
         )
-
         return {
             "is_left_valid": is_left_valid,
             "valid_count": valid_count,
+            "has_near_left": has_near_left,
             "has_far_left": has_far_left,
             "left_lean": lean_value,
             "near_offset": near_offset,
             "left_end_y": left_end_y,
-            "left_end_cm": left_end_cm
+            "left_end_cm": left_end_cm,
         }
 
     # ==========================================================
-    # 3B. PRIORITY 2: FRONT EDGE SCAN
+    # 4. PRIORITY 2: FRONT EDGE SCAN
     # ==========================================================
     def frontTracking():
         print("\n--- [PRIORITY 2: FRONT EDGE SCAN REPORT] ---")
-        width_steps = np.linspace(14, 60, 25, dtype=int)
+        width_steps = np.linspace(10, 60, 25, dtype=int)
         front_pts = front_curve.reshape(-1, 2)
         front_poly = np.polyfit(front_pts[:, 0], front_pts[:, 1], 2)
         brush_pts = brush_curve.reshape(-1, 2)
@@ -294,8 +309,9 @@ def process_and_trace():
         front_y = None
         if len(detected_points) >= 5:
             detected_arr = np.array(detected_points, dtype=np.float64)
-            front_y = round(float(np.median(detected_arr[:, 1])), 1)
-            front_cm = round(float(np.interp(front_y, y_calib, cm_calib)), 1)
+            avg_y = float(np.mean(detected_arr[:, 1]))
+            front_y = round(avg_y, 1)
+            front_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
 
             poly_tracked = np.polyfit(detected_arr[:, 0], detected_arr[:, 1], 2)
             x_vals = np.linspace(detected_arr[:, 0].min(), detected_arr[:, 0].max(), 60)
@@ -309,9 +325,9 @@ def process_and_trace():
 
         return front_cm, front_y
 
-    # Execute tracking routines based on active corner state
+    # Execute Priority 1 (widened during rotation) and Priority 2 (paused during rotation)
     is_rotating = (corner_state == "CORNER_ROTATE")
-    telem = leftTracking(wide_search=is_rotating)
+    left_data = leftTracking(wide_search=is_rotating)
 
     if is_rotating:
         front_cm, front_y = None, None
@@ -319,16 +335,13 @@ def process_and_trace():
     else:
         front_cm, front_y = frontTracking()
 
-    telem["front_cm"] = front_cm
-    telem["front_y"] = front_y
-
-    # 4. Draw Boundary Overlays
+    # 5. Draw Boundary Overlays
     cv2.polylines(traced_image, [left_curve], isClosed=False, color=(128, 0, 128), thickness=2)
     cv2.polylines(traced_image, [right_curve], isClosed=False, color=(128, 0, 128), thickness=2)
     cv2.polylines(traced_image, [brush_curve], isClosed=False, color=(128, 0, 128), thickness=2)
     cv2.polylines(traced_image, [front_curve], isClosed=False, color=(128, 0, 128), thickness=2)
 
-    # 5. Depth Tick Overlays
+    # 6. Height & Width Depth Ticks
     left_pts = left_curve.reshape(-1, 2)
     left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
     right_pts = right_curve.reshape(-1, 2)
@@ -349,7 +362,13 @@ def process_and_trace():
         if is_major:
             cv2.putText(traced_image, f"{cm}", (right_x + tick_length + 5, target_y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1)
 
-    return traced_image, latest_image_path, telem
+    telemetry = {
+        **left_data,
+        "front_cm": front_cm,
+        "front_y": front_y,
+    }
+
+    return traced_image, latest_image_path, telemetry
 
 
 # ==========================================================
@@ -370,19 +389,19 @@ def outputImage(traced_image, image_path):
 def decide_movement(telem):
     global blind_approach_steps, corner_state, corner_rotate_steps
 
-    # --- Calibrated Safe Lane Range (44px inner <-> 80px outer) ---
-    SAFE_LANE_MIN = 44.0
-    SAFE_LANE_MAX = 80.0
-    TARGET_OFFSET = 62.0
-    DEADZONE = 18.0
+    # --- Calibrated Safe Lane Range ---
+    SAFE_LANE_MIN = 44.0            # Inner limit (near left tape)
+    SAFE_LANE_MAX = 80.0            # Outer limit (riding-on-line limit)
+    TARGET_OFFSET = 62.0            # Midpoint of [44px .. 80px] safe lane
+    DEADZONE = 18.0                 # Allows full 44px..80px band + minor tilt before steering
     LANE_GAIN = 1.0
-    STOP_EDGE_CM = 10.0
-    SAFE_ROTATE_CLEARANCE_CM = 13.5
+    STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
+    SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 75
     HARD_TURN_DURATION = 200
     MAX_BLIND_APPROACH_STEPS = 2
-    MAX_CORNER_ROTATE_STEPS = 12
+    MAX_CORNER_ROTATE_STEPS = 12    # Safety cap so it never spins endlessly if no new edge exists
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -411,7 +430,7 @@ def decide_movement(telem):
             dist_str = f"{front_cm:.1f} cm" if front_cm is not None else "cleared frame"
             print(
                 f"[CORNER CLEARANCE OK] Front edge {dist_str} (>= {SAFE_ROTATE_CLEARANCE_CM} cm) "
-                f"-> Kickoff Pivot Right (M6 800)"
+                f"-> Safe to pivot! Kickoff Rotate Right (M6 800)"
             )
             corner_state = "CORNER_ROTATE"
             corner_rotate_steps = 1
@@ -424,7 +443,7 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: WIDE LEFT TRACKING + M6 120 STEPS UNTIL ALIGNED
+    # CORNER STATE 2: WIDE LEFT SCAN + M6 120 STEPS UNTIL STRAIGHT LINE LOCKS
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
         has_short_line = (valid_count >= 4)
@@ -442,7 +461,7 @@ def decide_movement(telem):
             return f"M1 {STEP_DURATION}", False
 
         if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
-            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
+            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) without locking straight edge -> STOP!")
             corner_state = "NORMAL"
             corner_rotate_steps = 0
             return None, True
@@ -460,9 +479,8 @@ def decide_movement(telem):
     if (has_far_left or valid_count >= 4) and valid_count >= 4:
         blind_approach_steps = 0
         if front_cm is not None and front_cm > STOP_EDGE_CM:
-            print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive -> KEEP GOING!")
+            print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
 
-        # If front edge is right at STOP_EDGE_CM and far left is gone, trigger corner turn
         if front_cm is not None and front_cm <= STOP_EDGE_CM and not has_far_left:
             print(
                 f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
@@ -537,7 +555,7 @@ def decide_movement(telem):
 
 
 # ==========================================================
-# AUTONOMOUS DRIVE LOOP ('a' MODE)
+# CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
     global blind_approach_steps, corner_state, corner_rotate_steps
@@ -546,43 +564,43 @@ def auto_drive_step_by_step(ser):
     corner_rotate_steps = 0
 
     print("\n==========================================")
-    print(">>> CONTINUOUS AUTONOMOUS DRIVE MODE ('a') <<<")
-    print("Press Ctrl+C to abort anytime.")
+    print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
+    print("Running until edge/stop condition (Press Ctrl+C to abort)")
     print("==========================================")
 
-    cycle = 0
+    step_count = 0
+
     try:
         while True:
-            cycle += 1
-            print(f"\n>>> [AUTO CYCLE {cycle}] <<<")
+            step_count += 1
+            print(f"\n>>> [AUTO CYCLE {step_count}] <<<")
 
-            # Uncomment for live camera capture on Radxa:
             captureImg.capture_image()
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is None:
-                print("[STOP] Waiting for a valid image.")
+                print("[STOP] Camera frame invalid — aborting auto drive.")
                 break
 
             outputImage(traced_img, img_path)
             cmd, should_stop = decide_movement(telem)
 
-            if should_stop or cmd is None:
-                send_command(ser, "M0 0")
-                print(f"[AUTO COMPLETE] Stop condition reached after {cycle} cycle(s).")
+            if cmd is not None:
+                send_command(ser, cmd)
+                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo[cite: 2]
+
+            if should_stop:
+                print(f"[AUTO COMPLETE] Stop condition reached after {step_count} cycle(s).")
                 break
 
-            send_command(ser, cmd)
-
     except KeyboardInterrupt:
-        print("\n[ABORTED] Ctrl+C pressed -> Sending emergency stop (M0 0)!")
-        send_command(ser, "M0 0")
+        print("\n[AUTO ABORTED] Stopped manually via Ctrl+C.")
 
     print("==========================================\n")
 
 
 # ==========================================================
-# MOBILE / WEB CONTROL BRIDGE (PORT 5000)[cite: 2]
+# MOBILE / WEB CONTROL BRIDGE (PORT 5000)
 # ==========================================================
 def mobileControl(ser):
     """Starts background HTTP listener on port 5000 for Node.js / Web commands[cite: 2]."""
@@ -618,12 +636,12 @@ def mobileControl(ser):
 
 
 # ==========================================================
-# DIRECT SERIAL TERMINAL MODE ('t' MODE + WEB)[cite: 2]
+# DIRECT SERIAL TERMINAL MODE ('t' MODE + WEB)
 # ==========================================================
 def direct_serial_mode(ser):
     print("\n==========================================")
     print(">>> DIRECT TERMINAL MODE ('t' MODE) <<<")
-    print("Type raw commands (e.g. M1 100, M20 100, M30 100, M0 0)")
+    print("Type raw commands (e.g. M1 100, M20 100, M30 100)")
     print("Type 'q' to return to main menu.")
     print("==========================================")
 
@@ -648,14 +666,16 @@ def direct_serial_mode(ser):
 # MAIN LOOP
 # ==========================================================
 def main_loop():
-    os.makedirs(FORWARD_DIR, exist_ok=True)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     ser = connect_port()
+    captureImg._init_camera()
 
     while True:
         cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
+            captureImg._cam_ready = False
+            if captureImg._cap is not None:
+                captureImg._cap.release()
             print("Terminating tracker.")
             if ser and ser.is_open:
                 ser.close()
@@ -663,14 +683,16 @@ def main_loop():
             break
         elif cmd == 'y':
             captureImg.capture_image()
+
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
                 decision, _ = decide_movement(telem)
-                if decision:
+                if decision is not None:
                     send_command(ser, decision)
         elif cmd == 'c':
             captureImg.capture_image()
+
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
