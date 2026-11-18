@@ -1,5 +1,6 @@
 import os
 import glob
+import math
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -17,6 +18,7 @@ OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 115200
+BRUSH_WIDTH_CM = 71.0
 
 serial_lock = threading.Lock()
 blind_approach_steps = 0
@@ -152,8 +154,13 @@ def process_and_trace():
     cm_calib = np.array([65,    60,  55,    50,  45,    40,  35,  30,  25,  20,  15,  10,  5,   0], dtype=float)
     y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630, 720, 760], dtype=float)
 
+    left_pts = left_curve.reshape(-1, 2)
+    left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
+    right_pts = right_curve.reshape(-1, 2)
+    right_poly = np.polyfit(right_pts[:, 1], right_pts[:, 0], 2)
+
     # ==========================================================
-    # 3. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION / PULL-IN)
+    # 3. PRIORITY 1: LEFT LINE SCAN + REAL-WORLD DEGREE ANGLE
     # ==========================================================
     def leftTracking(wide_search=False):
         mode_tag = "WIDE ROTATION SCAN" if wide_search else "NORMAL LANE SCAN"
@@ -175,11 +182,9 @@ def process_and_trace():
         }
         MAX_OFFSET_JUMP_PX = 55 if wide_search else 20
 
-        left_pts = left_curve.reshape(-1, 2)
-        left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
-
         detected_points = []
         offsets_by_cm = {}
+        x_cm_by_y_cm = {}
         prev_calibrated_px = None
 
         # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)
@@ -188,6 +193,8 @@ def process_and_trace():
             base_y = np.interp(cm, cm_calib[::-1], y_calib[::-1])
             target_y = int(base_y)
             left_x = int(np.polyval(left_poly, target_y))
+            right_x = int(np.polyval(right_poly, target_y))
+            lane_width_px = max(1.0, float(right_x - left_x))
 
             if wide_search:
                 search_start = max(0, left_x - 60)
@@ -210,13 +217,20 @@ def process_and_trace():
                     print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED jump ({calibrated_px:+4d}px vs prev {prev_calibrated_px:+4d}px)")
                     continue
 
+                # Convert pixel offset at this row into real-world cm (71.0 cm full panel width)
+                x_cm = round((calibrated_px / lane_width_px) * BRUSH_WIDTH_CM, 2)
+
                 prev_calibrated_px = calibrated_px
                 offsets_by_cm[cm_key] = calibrated_px
+                x_cm_by_y_cm[cm_key] = x_cm
                 detected_points.append((edge_x, target_y))
                 cv2.circle(traced_image, (edge_x, target_y), 3, (0, 0, 255), -1)
                 cv2.line(traced_image, (left_x, target_y), (edge_x, target_y), (0, 0, 255), 1)
 
-                print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | BaseX={left_x:3d} -> EdgeX={edge_x:3d} | Raw={raw_px:+4d}px | Offset={calibrated_px:+4d}px")
+                print(
+                    f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | BaseX={left_x:3d} -> EdgeX={edge_x:3d} | "
+                    f"Offset={calibrated_px:+4d}px ({x_cm:+5.1f}cm)"
+                )
             else:
                 print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | (No white pixels detected in window)")
 
@@ -240,10 +254,20 @@ def process_and_trace():
             sorted_cms = sorted(offsets_by_cm.keys())
             lean_value = round(float(offsets_by_cm[sorted_cms[-1]] - offsets_by_cm[sorted_cms[0]]), 1)
 
+        # Real-World Heading Angle (degrees) from Top-Down (Y_cm, X_cm) linear fit
+        angle_deg = None
+        if len(x_cm_by_y_cm) >= 3:
+            y_cm_arr = np.array(sorted(x_cm_by_y_cm.keys()), dtype=np.float64)
+            x_cm_arr = np.array([x_cm_by_y_cm[k] for k in sorted(x_cm_by_y_cm.keys())], dtype=np.float64)
+            slope_dx_dy, _ = np.polyfit(y_cm_arr, x_cm_arr, 1)
+            angle_deg = round(math.degrees(math.atan(slope_dx_dy)), 1)
+
         valid_count = len(offsets_by_cm)
         near_offsets = [offsets_by_cm[cm_k] for cm_k in offsets_by_cm if cm_k <= 25]
+        near_x_cms = [x_cm_by_y_cm[cm_k] for cm_k in x_cm_by_y_cm if cm_k <= 25]
         near_count = len(near_offsets)
         near_offset = round(float(np.median(near_offsets)), 1) if near_count > 0 else None
+        near_x_cm = round(float(np.median(near_x_cms)), 1) if near_count > 0 else None
         has_near_left = (near_count >= 2)
         mark_5_offset = offsets_by_cm.get(5, None)
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
@@ -253,9 +277,10 @@ def process_and_trace():
         left_end_y = detected_points[-1][1] if len(detected_points) > 0 else None
         left_end_cm = max(offsets_by_cm.keys()) if len(offsets_by_cm) > 0 else None
 
+        angle_str = f"{angle_deg:+.1f} deg" if angle_deg is not None else "None"
         print(
             f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {near_count} near, 5cm={mark_5_offset}px) | "
-            f"Far Alive: {has_far_left} | Lean: {lean_value} px | Near Offset: {near_offset} px | Ends at Y={left_end_y} px ({left_end_cm} cm)"
+            f"Est. Angle: {angle_str} | Lean: {lean_value} px | Near Offset: {near_offset} px ({near_x_cm} cm) | Ends at Y={left_end_y} px ({left_end_cm} cm)"
         )
         return {
             "is_left_valid": is_left_valid,
@@ -264,7 +289,9 @@ def process_and_trace():
             "mark_5_offset": mark_5_offset,
             "has_far_left": has_far_left,
             "left_lean": lean_value,
+            "angle_deg": angle_deg,
             "near_offset": near_offset,
+            "near_x_cm": near_x_cm,
             "left_end_y": left_end_y,
             "left_end_cm": left_end_cm,
         }
@@ -346,11 +373,6 @@ def process_and_trace():
     cv2.polylines(traced_image, [front_curve], isClosed=False, color=(128, 0, 128), thickness=2)
 
     # 6. Height & Width Depth Ticks
-    left_pts = left_curve.reshape(-1, 2)
-    left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
-    right_pts = right_curve.reshape(-1, 2)
-    right_poly = np.polyfit(right_pts[:, 1], right_pts[:, 0], 2)
-
     for cm in range(65, -1, -1):
         target_y = int(np.interp(cm, cm_calib[::-1], y_calib[::-1]))
         is_major = (cm % 5 == 0)
@@ -401,6 +423,8 @@ def decide_movement(telem):
     LANE_GAIN = 1.0
     STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
+    COARSE_ALIGN_MAX_DEG = 12.0     # Must rotate within ±12 deg BEFORE pulling forward with M1
+    FINAL_ALIGN_MAX_DEG = 4.0       # Final squared hull tolerance (±4 deg) after pull-in
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
     HARD_TURN_DURATION = 300        # Strong correction when far outside 50..70 px band
@@ -413,20 +437,23 @@ def decide_movement(telem):
     mark_5_offset = telem.get("mark_5_offset", None)
     has_far_left = telem["has_far_left"]
     left_lean = telem["left_lean"]
+    angle_deg = telem.get("angle_deg", None)
     near_offset = telem["near_offset"]
+    near_x_cm = telem.get("near_x_cm", None)
     left_end_y = telem["left_end_y"]
     left_end_cm = telem["left_end_cm"]
     front_cm = telem["front_cm"]
     front_y = telem["front_y"]
 
     mark_5_in_range = (mark_5_offset is not None and SAFE_LANE_MIN <= mark_5_offset <= SAFE_LANE_MAX)
+    angle_display = f"{angle_deg:+.1f} deg" if angle_deg is not None else "None"
 
     print("\n" + "=" * 55)
     print(f"TELEMETRY SUMMARY [STATE: {corner_state}]:")
     print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} pts, 5cm={mark_5_offset}px, In50..70={mark_5_in_range})")
+    print(f"  [P1] Est. Line Angle : {angle_display} (Lean={left_lean} px)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
-    print(f"  [P1] Left Lean       : {left_lean} px")
-    print(f"  [P1] Near Offset     : {near_offset} px (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
+    print(f"  [P1] Near Offset     : {near_offset} px / {near_x_cm} cm (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
     print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
     print("=" * 55)
 
@@ -434,7 +461,7 @@ def decide_movement(telem):
     # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 800 KICKOFF
     # ----------------------------------------------------------
     if corner_state == "CORNER_BACKUP":
-        # Safeguard: If backing up reveals the left boundary continues past a panel seam, cancel turn!
+        # Safeguard: If backing up reveals the left boundary actually continues past a panel seam, cancel turn!
         if has_far_left and valid_count >= 8:
             print(
                 f"[CORNER ABORTED - SEAM DETECTED] Left line continues to {left_end_cm} cm ({valid_count} pts) "
@@ -463,24 +490,28 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: COARSE M6 ROTATE UNTIL NEW EDGE IS SPOTTED AHEAD
+    # CORNER STATE 2: COARSE M6 ROTATE UNTIL ANGLE <= ±12.0 DEG
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
-        line_spotted = (valid_count >= 3)
+        angle_within_coarse = (
+            valid_count >= 3
+            and angle_deg is not None
+            and abs(angle_deg) <= COARSE_ALIGN_MAX_DEG
+        )
 
-        if line_spotted:
+        if angle_within_coarse:
             if not mark_5_in_range:
                 print(
-                    f"[CORNER PULL-IN START] New edge spotted ahead (Pts={valid_count}, 5cm={mark_5_offset}px), "
-                    f"moving M1 forward until 5cm mark sits in 50..70px -> M1 {STEP_DURATION}"
+                    f"[CORNER PULL-IN START] Angle within {COARSE_ALIGN_MAX_DEG} deg ({angle_deg:+.1f} deg, Pts={valid_count}), "
+                    f"moving M1 forward until 5cm mark ({mark_5_offset}px) sits in 50..70px -> M1 {STEP_DURATION}"
                 )
                 corner_state = "CORNER_PULL_IN"
                 corner_pull_steps = 1
                 return f"M1 {STEP_DURATION}", False
             else:
                 print(
-                    f"[CORNER FINAL ALIGN] 5cm mark already in 50..70px ({mark_5_offset}px) "
-                    f"-> Checking final hull rotation"
+                    f"[CORNER FINAL ALIGN] Angle {angle_deg:+.1f} deg & 5cm mark already in 50..70px ({mark_5_offset}px) "
+                    f"-> Checking final hull square"
                 )
                 corner_state = "CORNER_FINAL_ALIGN"
                 corner_rotate_steps = 0
@@ -496,7 +527,7 @@ def decide_movement(telem):
             corner_rotate_steps += 1
             print(
                 f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"Searching for new edge ahead (Pts={valid_count}, 5cm={mark_5_offset}px) -> M6 120"
+                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 120"
             )
             return "M6 120", False
 
@@ -515,27 +546,31 @@ def decide_movement(telem):
             corner_pull_steps += 1
             print(
                 f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"Stepping M1 until 5cm mark ({mark_5_offset}px) enters 50..70px -> M1 {STEP_DURATION}"
+                f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 50..70px -> M1 {STEP_DURATION}"
             )
             return f"M1 {STEP_DURATION}", False
 
         print(
-            f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px (inside 50..70px) "
+            f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px (inside 50..70px, Angle={angle_display}) "
             f"-> Continuing final rotation to straighten hull!"
         )
         corner_state = "CORNER_FINAL_ALIGN"
         corner_rotate_steps = 0
 
     # ----------------------------------------------------------
-    # CORNER STATE 4: CONTINUE ROTATING UNTIL HULL IS STRAIGHT ON THE LINE
+    # CORNER STATE 4: CONTINUE ROTATING UNTIL HULL ANGLE <= ±4.0 DEG
     # ----------------------------------------------------------
     if corner_state == "CORNER_FINAL_ALIGN":
-        is_straight = (left_lean is not None and abs(left_lean) <= 15.0 and valid_count >= 4)
+        is_straight = (
+            valid_count >= 4
+            and angle_deg is not None
+            and abs(angle_deg) <= FINAL_ALIGN_MAX_DEG
+        )
 
         if is_straight:
             print(
-                f"[CORNER TURN COMPLETE] Hull squared & 5cm anchored at {mark_5_offset}px! "
-                f"(Pts={valid_count}, Lean={left_lean:+.1f}px) -> Resume Normal (M1 {STEP_DURATION})"
+                f"[CORNER TURN COMPLETE] Hull squared ({angle_deg:+.1f} deg) & 5cm anchored at {mark_5_offset}px! "
+                f"(Pts={valid_count}) -> Resume Normal (M1 {STEP_DURATION})"
             )
             corner_state = "NORMAL"
             corner_rotate_steps = 0
@@ -551,17 +586,16 @@ def decide_movement(telem):
             return None, True
 
         corner_rotate_steps += 1
-        # Continue rotating right (M6 120) if still under-rotated (lean > 0), or pivot left (M5 250) if slightly over-rotated
-        if left_lean is None or left_lean > 0:
+        if angle_deg is None or angle_deg > 0:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Lean={left_lean} -> Continue Rotate Right (M6 120)"
+                f"5cm={mark_5_offset}px, Angle={angle_display} -> Continue Rotate Right (M6 120)"
             )
             return "M6 120", False
         else:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Lean={left_lean:+.1f}px -> Rotate Left (M5 250)"
+                f"5cm={mark_5_offset}px, Angle={angle_display} -> Rotate Left (M5 250)"
             )
             return "M5 250", False
 
@@ -587,7 +621,10 @@ def decide_movement(telem):
         total_error = angle_error + (LANE_GAIN * lane_error)
 
         in_safe_band = (near_offset is None) or (SAFE_LANE_MIN <= near_offset <= SAFE_LANE_MAX)
-        print(f"[LANE CHECK] Offset={near_offset}px (InBand={in_safe_band}) | Angle={angle_error:+.1f}px | TotalError={total_error:+.1f}px")
+        print(
+            f"[LANE CHECK] Offset={near_offset}px (InBand={in_safe_band}) | "
+            f"Angle={angle_display} (Lean={angle_error:+.1f}px) | TotalError={total_error:+.1f}px"
+        )
 
         if abs(total_error) > DEADZONE:
             turn_ticks = HARD_TURN_DURATION if abs(total_error) > 22.0 else MICRO_TURN_DURATION
