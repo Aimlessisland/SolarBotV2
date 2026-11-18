@@ -617,27 +617,45 @@ def decide_movement(telem):
             return "M2 300", False
 
         lane_error = (near_offset - TARGET_OFFSET) if near_offset is not None else 0.0
-        angle_error = left_lean if left_lean is not None else 0.0
-        total_error = angle_error + (LANE_GAIN * lane_error)
+        cur_angle = angle_deg if angle_deg is not None else 0.0
+
+        # Project where the robot will land after 1 forward M1 step (~10 cm ahead)
+        # Every +1 deg of angle shifts lateral offset by ~2.5 px over a 10 cm forward step
+        projected_offset = (near_offset + (cur_angle * 2.5)) if near_offset is not None else TARGET_OFFSET
+        will_land_in_band = (SAFE_LANE_MIN <= projected_offset <= SAFE_LANE_MAX) and (abs(cur_angle) <= 6.0)
+
+        # Desired heading angle to smoothly glide back toward 60 px (clamped to ±8 deg)
+        desired_angle = max(-8.0, min(8.0, -lane_error * 0.35))
+        angle_diff = cur_angle - desired_angle
 
         in_safe_band = (near_offset is None) or (SAFE_LANE_MIN <= near_offset <= SAFE_LANE_MAX)
         print(
             f"[LANE CHECK] Offset={near_offset}px (InBand={in_safe_band}) | "
-            f"Angle={angle_display} (Lean={angle_error:+.1f}px) | TotalError={total_error:+.1f}px"
+            f"Angle={angle_display} (Target={desired_angle:+.1f} deg) | Projected={projected_offset:.1f}px"
         )
 
-        if abs(total_error) > DEADZONE:
-            turn_ticks = HARD_TURN_DURATION if abs(total_error) > 22.0 else MICRO_TURN_DURATION
-            if total_error > 0:
-                print(f"[PRIORITY 1] Outside Safe Lane -> Steer Right (Total={total_error:+.1f}px) -> M4 {turn_ticks}")
-                return f"M4 {turn_ticks}", False
-            else:
-                print(f"[PRIORITY 1] Outside Safe Lane -> Steer Left (Total={total_error:+.1f}px) -> M3 {turn_ticks}")
-                return f"M3 {turn_ticks}", False
-        else:
-            print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) -> Step Forward (M1 {STEP_DURATION})")
+        # 1. Already inside 50..70px and straight (<= 4.5 deg) -> Drive straight!
+        if in_safe_band and abs(cur_angle) <= 4.5:
+            print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) & Straight -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
+        # 2. Slightly outside 50..70px, BUT nose is already pointed back into the lane -> Use M1 to glide in!
+        if will_land_in_band:
+            print(f"[PRIORITY 1 - GLIDE IN] Angled toward center ({cur_angle:+.1f} deg) -> Step Forward to self-align (M1 {STEP_DURATION})")
+            return f"M1 {STEP_DURATION}", False
+
+        # 3. Heading angle needs correction to glide smoothly onto 60 px target
+        if abs(angle_diff) > 3.5:
+            turn_ticks = HARD_TURN_DURATION if abs(angle_diff) > 9.0 else MICRO_TURN_DURATION
+            if angle_diff > 0:
+                print(f"[PRIORITY 1] Adjust Heading Right (Diff={angle_diff:+.1f} deg) -> M4 {turn_ticks}")
+                return f"M4 {turn_ticks}", False
+            else:
+                print(f"[PRIORITY 1] Adjust Heading Left (Diff={angle_diff:+.1f} deg) -> M3 {turn_ticks}")
+                return f"M3 {turn_ticks}", False
+        else:
+            print(f"[PRIORITY 1] Heading on intercept course ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
+            return f"M1 {STEP_DURATION}", False
     # ----------------------------------------------------------
     # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
     # ----------------------------------------------------------
