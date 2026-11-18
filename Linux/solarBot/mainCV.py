@@ -557,7 +557,7 @@ def auto_drive_step_by_step(ser):
             print(f"\n>>> [AUTO CYCLE {cycle}] <<<")
 
             # Uncomment for live camera capture on Radxa:
-            # captureImg.capture_image()
+            captureImg.capture_image()
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is None:
