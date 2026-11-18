@@ -408,25 +408,25 @@ def decide_movement(telem):
     print("=" * 55)
 
     # ----------------------------------------------------------
-    # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 1200 KICKOFF
+    # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 1000 KICKOFF
     # ----------------------------------------------------------
     if corner_state == "CORNER_BACKUP":
         if front_cm is None or front_cm >= SAFE_ROTATE_CLEARANCE_CM:
             dist_str = f"{front_cm:.1f} cm" if front_cm is not None else "cleared frame"
             print(
                 f"[CORNER CLEARANCE OK] Front edge {dist_str} (>= {SAFE_ROTATE_CLEARANCE_CM} cm) "
-                f"-> Kickoff Pivot Right (M6 1200)"
+                f"-> Kickoff Pivot Right (M6 1000)"
             )
             corner_state = "CORNER_ROTATE"
             corner_rotate_steps = 1
-            return "M6 1200", False
+            return "M6 1000", False
         else:
             print(
                 f"[CORNER BACKUP RETRY] Front edge only {front_cm:.1f} cm (< {SAFE_ROTATE_CLEARANCE_CM} cm) "
                 f"-> Backing up more for safety (M2 200)"
             )
             return "M2 200", False
-
+            
     # ----------------------------------------------------------
     # CORNER STATE 2: SLOW M6 120 STEPS UNTIL 5..25cm+ STRAIGHT LINE LOCKS
     # ----------------------------------------------------------
