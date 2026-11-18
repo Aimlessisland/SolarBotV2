@@ -33,7 +33,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path != "/__delete_folder__":
+        if parsed.path != "/__clear_folder__":
             self.send_error(HTTPStatus.NOT_FOUND, "Unknown endpoint")
             return
 
@@ -49,9 +49,9 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
         root_dir = os.path.abspath(self.directory)
         target_dir = os.path.abspath(self.translate_path(target_url_path))
 
-        # Safety check: never delete the root directory or anything outside it
+        # Safety check: never clear the root directory or anything outside it
         if target_dir == root_dir or not target_dir.startswith(root_dir + os.sep):
-            self.send_error(HTTPStatus.FORBIDDEN, "Cannot delete root folder")
+            self.send_error(HTTPStatus.FORBIDDEN, "Cannot clear root folder")
             return
 
         if not os.path.isdir(target_dir):
@@ -59,9 +59,14 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         try:
-            shutil.rmtree(target_dir)
+            for entry in os.listdir(target_dir):
+                entry_path = os.path.join(target_dir, entry)
+                if os.path.isdir(entry_path) and not os.path.islink(entry_path):
+                    shutil.rmtree(entry_path)
+                else:
+                    os.unlink(entry_path)
         except OSError as e:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Delete failed: {e}")
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Clear failed: {e}")
             return
 
         resp = json.dumps({"ok": True}).encode("utf-8")
@@ -105,8 +110,8 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
             href = urllib.parse.quote(f)
             nav_links.append(f'<a class="chip file" href="{href}">📄 {html.escape(f)}</a>')
 
-        delete_btn_html = (
-            '<button class="danger" onclick="deleteFolder()">🗑️ Delete Folder</button>'
+        clear_btn_html = (
+            '<button class="danger" onclick="clearFolder()">🗑️ Clear Content</button>'
             if rel_path != "/"
             else ""
         )
@@ -195,7 +200,7 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
   <header>
     <div class="topbar">
       <div class="path">{title}</div>
-      {delete_btn_html}
+      {clear_btn_html}
     </div>
     <div class="links">{''.join(nav_links)}</div>
   </header>
@@ -272,12 +277,12 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
     show(idx + delta, true);
   }}
 
-  async function deleteFolder() {{
+  async function clearFolder() {{
     const folderName = decodeURIComponent(window.location.pathname);
-    if (!confirm(`Delete the entire folder "${{folderName}}" and everything inside it?`)) return;
+    if (!confirm(`Delete all files inside "${{folderName}}"? (The folder itself will stay)`)) return;
 
     try {{
-      const res = await fetch("/__delete_folder__", {{
+      const res = await fetch("/__clear_folder__", {{
         method: "POST",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify({{ path: window.location.pathname }})
@@ -285,16 +290,15 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
       if (res.ok) {{
         sessionStorage.removeItem(idxKey);
         sessionStorage.removeItem(scrollKey);
-        window.location.href = "../";
+        window.location.reload();
       }} else {{
-        alert("Failed to delete folder: " + (await res.text()));
+        alert("Failed to clear content: " + (await res.text()));
       }}
     }} catch (err) {{
-      alert("Error deleting folder: " + err);
+      alert("Error clearing content: " + err);
     }}
   }}
 
-  // Fast horizontal scroll using mouse wheel over thumbnail strip
   stripEl.addEventListener("wheel", (e) => {{
     if (e.deltaY !== 0) {{
       e.preventDefault();
@@ -318,7 +322,6 @@ class GalleryHandler(http.server.SimpleHTTPRequestHandler):
     }}
   }}
 
-  // Auto-reload page periodically (pauses while browsing thumbnails)
   setInterval(() => {{
     if (isHoveringStrip) return;
     sessionStorage.setItem(idxKey, idx);
