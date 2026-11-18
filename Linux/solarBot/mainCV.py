@@ -436,10 +436,9 @@ def decide_movement(telem):
     # CORNER STATE 2: SLOW CLOSED-LOOP M6 PIVOT UNTIL SHORT STRAIGHT LINE LOCKS
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
-        # Only requires >= 4 continuous points (<50% of 0..65cm) as long as they are straight
         has_short_line = (valid_count >= 4)
-        is_straight = (left_lean is not None and abs(left_lean) <= 12.0)
-        in_lane_bounds = (near_offset is not None and 20.0 <= near_offset <= 95.0)
+        is_straight = (left_lean is not None and abs(left_lean) <= 25.0)
+        in_lane_bounds = (near_offset is not None and 8.0 <= near_offset <= 95.0)
 
         if has_short_line and is_straight and in_lane_bounds:
             print(
@@ -450,21 +449,6 @@ def decide_movement(telem):
             corner_rotate_steps = 0
             blind_approach_steps = 0
             return f"M1 {STEP_DURATION}", False
-
-        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
-            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) without locking straight edge -> STOP!")
-            corner_state = "NORMAL"
-            corner_rotate_steps = 0
-            return None, True
-
-        corner_rotate_steps += 1
-        # Use crisp micro-pivot (120 ticks) once any 3+ points appear so it doesn't swing past straight
-        rot_ticks = 120 if valid_count >= 3 else 250
-        print(
-            f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-            f"Aligning straight (Pts={valid_count}, Lean={left_lean}, Offset={near_offset}) -> M6 {rot_ticks}"
-        )
-        return f"M6 {rot_ticks}", False
 
     # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE STILL DETECTED AHEAD -> KEEP GOING
