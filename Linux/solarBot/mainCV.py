@@ -9,7 +9,7 @@ import numpy as np
 import serial
 
 # Uncomment when capturing live from USB camera on the Radxa board:
-# import captureImg
+import captureImg
 
 OUTPUT_DIR = "objectDetectTest"
 FORWARD_DIR = "imgForward"
@@ -662,7 +662,7 @@ def main_loop():
                 print("Serial port closed.")
             break
         elif cmd == 'y':
-            # captureImg.capture_image()
+            captureImg.capture_image()
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
@@ -670,7 +670,7 @@ def main_loop():
                 if decision:
                     send_command(ser, decision)
         elif cmd == 'c':
-            # captureImg.capture_image()
+            captureImg.capture_image()
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
                 outputImage(traced_img, img_path)
