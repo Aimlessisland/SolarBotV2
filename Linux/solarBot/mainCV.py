@@ -408,39 +408,35 @@ def decide_movement(telem):
     print("=" * 55)
 
     # ----------------------------------------------------------
-    # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm)
+    # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 1200 KICKOFF
     # ----------------------------------------------------------
     if corner_state == "CORNER_BACKUP":
-        if front_cm is not None and front_cm >= SAFE_ROTATE_CLEARANCE_CM:
+        if front_cm is None or front_cm >= SAFE_ROTATE_CLEARANCE_CM:
+            dist_str = f"{front_cm:.1f} cm" if front_cm is not None else "cleared frame"
             print(
-                f"[CORNER CLEARANCE OK] Front edge at {front_cm:.1f} cm (>= {SAFE_ROTATE_CLEARANCE_CM} cm) "
-                f"-> Safe to pivot! Kickoff Rotate Right (M6 900)"
+                f"[CORNER CLEARANCE OK] Front edge {dist_str} (>= {SAFE_ROTATE_CLEARANCE_CM} cm) "
+                f"-> Kickoff Pivot Right (M6 1200)"
             )
             corner_state = "CORNER_ROTATE"
             corner_rotate_steps = 1
-            return "M6 900", False
-        elif front_cm is not None and front_cm < SAFE_ROTATE_CLEARANCE_CM:
+            return "M6 1200", False
+        else:
             print(
                 f"[CORNER BACKUP RETRY] Front edge only {front_cm:.1f} cm (< {SAFE_ROTATE_CLEARANCE_CM} cm) "
                 f"-> Backing up more for safety (M2 200)"
             )
             return "M2 200", False
-        else:
-            # Front edge moved out of top of frame (> 65 cm away) -> plenty of clearance
-            print("[CORNER CLEARANCE OK] Front edge cleared frame -> Kickoff Rotate Right (M6 900)")
-            corner_state = "CORNER_ROTATE"
-            corner_rotate_steps = 1
-            return "M6 900", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: SLOW CLOSED-LOOP M6 PIVOT UNTIL SHORT STRAIGHT LINE LOCKS
+    # CORNER STATE 2: SLOW M6 120 STEPS UNTIL 5..25cm+ STRAIGHT LINE LOCKS
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
-        has_short_line = (valid_count >= 4)
+        # At least 4 continuous points (5, 10, 15, 20+ cm) in a straight line
+        has_near_line = (valid_count >= 4)
         is_straight = (left_lean is not None and abs(left_lean) <= 25.0)
         in_lane_bounds = (near_offset is not None and 8.0 <= near_offset <= 95.0)
 
-        if has_short_line and is_straight and in_lane_bounds:
+        if has_near_line and is_straight and in_lane_bounds:
             print(
                 f"[CORNER TURN COMPLETE] Locked onto straight edge! "
                 f"(Pts={valid_count}, Offset={near_offset}px, Lean={left_lean:+.1f}px) -> Resume Forward (M1 {STEP_DURATION})"
@@ -449,6 +445,19 @@ def decide_movement(telem):
             corner_rotate_steps = 0
             blind_approach_steps = 0
             return f"M1 {STEP_DURATION}", False
+
+        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
+            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) without locking straight edge -> STOP!")
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
+            return None, True
+
+        corner_rotate_steps += 1
+        print(
+            f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
+            f"Slow align for straight line (Pts={valid_count}, Lean={left_lean}, Offset={near_offset}) -> M6 120"
+        )
+        return "M6 120", False
 
     # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE STILL DETECTED AHEAD -> KEEP GOING
