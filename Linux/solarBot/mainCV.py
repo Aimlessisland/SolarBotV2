@@ -9,6 +9,7 @@ import numpy as np
 import serial
 
 import captureImg
+
 # Tuned Up reference are forward 65 width 71 as brush the rest of parameter let god design
 # May peace be with you!
 
@@ -26,7 +27,7 @@ corner_rotate_steps = 0
 def connect_port():
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        time.sleep(2)  # One-time Arduino Uno reset settle[cite: 2]
+        time.sleep(2)  # One-time Arduino Uno reset settle
         ser.reset_input_buffer()
         print(f"[CONNECTED] {SERIAL_PORT} @ {BAUD_RATE} ready!")
         return ser
@@ -39,7 +40,7 @@ def connect_port():
 # COMMAND DISPATCHER (THREAD-SAFE FOR KEYBOARD + WEB)
 # ==========================================================
 def send_command(ser, command):
-    """Sends command over serial and waits for Arduino 'OK'[cite: 2]."""
+    """Sends command over serial and waits for Arduino 'OK'."""
     with serial_lock:
         if ser is None:
             print(f"\n>>> [OFFLINE] COMMAND ISSUED: {command} <<<\n")
@@ -112,7 +113,7 @@ def process_and_trace():
     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray_img, 100, 200)
 
-    # 2. Define Boundaries & Calibration Curves[cite: 2]
+    # 2. Define Boundaries & Calibration Curves
     cx_ratio = 0.482
 
     left_top = (int(w * 0.305), int(h * 0.165))
@@ -147,8 +148,8 @@ def process_and_trace():
     masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
     traced_image = cv2.cvtColor(masked_edges, cv2.COLOR_GRAY2BGR)
 
-    cm_calib = np.array([65,   60,   55,   50,   45,   40,   35,   30,   25,   20,   15,   10,   5,    0   ], dtype=float)
-    y_calib  = np.array([215.5, 240,  254.5, 280,  300.5, 340,  375,  410,  438,  496,  553,  630,  720,  760  ], dtype=float)
+    cm_calib = np.array([65,    60,  55,    50,  45,    40,  35,  30,  25,  20,  15,  10,  5,   0], dtype=float)
+    y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630, 720, 760], dtype=float)
 
     # ==========================================================
     # 3. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION)
@@ -180,7 +181,7 @@ def process_and_trace():
         offsets_by_cm = {}
         prev_calibrated_px = None
 
-        # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)[cite: 2]
+        # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)
         for cm in reversed(cm_calib[:-1]):
             cm_key = int(cm)
             base_y = np.interp(cm, cm_calib[::-1], y_calib[::-1])
@@ -203,7 +204,7 @@ def process_and_trace():
                 correction = left_perspective_corrections.get(cm_key, 0)
                 calibrated_px = raw_px + correction
 
-                # Continuity check against previous valid point below it[cite: 2]
+                # Continuity check against previous valid point below it
                 if prev_calibrated_px is not None and abs(calibrated_px - prev_calibrated_px) > MAX_OFFSET_JUMP_PX:
                     print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED jump ({calibrated_px:+4d}px vs prev {prev_calibrated_px:+4d}px)")
                     continue
@@ -246,7 +247,7 @@ def process_and_trace():
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
         is_left_valid = (valid_count >= 4) or has_near_left
 
-        # Topmost point where left line stops (detected_points is bottom-to-top, so [-1] is topmost)[cite: 2]
+        # Topmost point where left line stops (detected_points is bottom-to-top, so [-1] is topmost)
         left_end_y = detected_points[-1][1] if len(detected_points) > 0 else None
         left_end_cm = max(offsets_by_cm.keys()) if len(offsets_by_cm) > 0 else None
 
@@ -426,7 +427,7 @@ def decide_movement(telem):
     # CORNER STATE 1: VERIFY SAFE BACKUP CLEARANCE (>= 13.5 cm) -> M6 800 KICKOFF
     # ----------------------------------------------------------
     if corner_state == "CORNER_BACKUP":
-        # Safeguard: If backing up reveals the left boundary actually continues past the seam, cancel turn!
+        # Safeguard: If backing up reveals the left boundary actually continues past a panel seam, cancel turn!
         if has_far_left and valid_count >= 8:
             print(
                 f"[CORNER ABORTED - SEAM DETECTED] Left line continues to {left_end_cm} cm ({valid_count} pts) "
@@ -518,7 +519,7 @@ def decide_movement(telem):
         else:
             print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
-            
+
     # ----------------------------------------------------------
     # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
     # ----------------------------------------------------------
@@ -598,7 +599,7 @@ def auto_drive_step_by_step(ser):
 
             if cmd is not None:
                 send_command(ser, cmd)
-                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo[cite: 2]
+                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo
 
             if should_stop:
                 print(f"[AUTO COMPLETE] Stop condition reached after {step_count} cycle(s).")
@@ -614,7 +615,7 @@ def auto_drive_step_by_step(ser):
 # MOBILE / WEB CONTROL BRIDGE (PORT 5000)
 # ==========================================================
 def mobileControl(ser):
-    """Starts background HTTP listener on port 5000 for Node.js / Web commands[cite: 2]."""
+    """Starts background HTTP listener on port 5000 for Node.js / Web commands."""
     class WebCmdHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
@@ -677,16 +678,18 @@ def direct_serial_mode(ser):
 # MAIN LOOP
 # ==========================================================
 def main_loop():
+    os.makedirs(FORWARD_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     ser = connect_port()
-    captureImg._init_camera()
+    captureImg.init_camera()
 
     while True:
         cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
-            captureImg._cam_ready = False
-            if captureImg._cap is not None:
-                captureImg._cap.release()
+            captureImg.cam_ready = False
+            if captureImg.cap is not None:
+                captureImg.cap.release()
             print("Terminating tracker.")
             if ser and ser.is_open:
                 ser.close()
