@@ -22,6 +22,7 @@ BRUSH_WIDTH_CM = 71.0
 
 serial_lock = threading.Lock()
 blind_approach_steps = 0
+front_guide_steps = 0
 corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE" -> "CORNER_PULL_IN" -> "CORNER_FINAL_ALIGN"
 corner_rotate_steps = 0
 corner_pull_steps = 0
@@ -361,7 +362,7 @@ def process_and_trace():
         def fit_clean_front(hits, color_bgr, label):
             if len(hits) < 5:
                 print(f"  [{label:8s}] Hits: {len(hits):2d}/25 (Insufficient)")
-                return None, None, 0
+                return None, None, 0, None, None
 
             arr = np.array(hits, dtype=np.float64)
             med_y = float(np.median(arr[:, 1]))
@@ -369,11 +370,32 @@ def process_and_trace():
             inliers = arr[np.abs(arr[:, 1] - med_y) <= 25.0]
             if len(inliers) < 5:
                 print(f"  [{label:8s}] Hits: {len(hits):2d}/25 -> Only {len(inliers)} inliers near Y={med_y:.1f}px (Scattered glare)")
-                return None, None, len(inliers)
+                return None, None, len(inliers), None, None
 
             avg_y = float(np.mean(inliers[:, 1]))
             f_y = round(avg_y, 1)
             f_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
+
+            # Calculate front-line straightness (tilt: Y_right - Y_left)
+            # Positive tilt (+px) = right side is lower/closer than left -> nose angled left -> steer right (M4)
+            # Negative tilt (-px) = left side is lower/closer than right -> nose angled right -> steer left (M3)
+            x_span = float(inliers[:, 0].max() - inliers[:, 0].min())
+            tilt_px = 0.0
+            tilt_deg = 0.0
+            if x_span >= 40.0:
+                slope_dy_dx, _ = np.polyfit(inliers[:, 0], inliers[:, 1], 1)
+                tilt_px = round(float(slope_dy_dx * x_span), 1)
+
+                left_x_at_y = float(np.polyval(left_poly, avg_y))
+                right_x_at_y = float(np.polyval(right_poly, avg_y))
+                lane_w_px = max(1.0, right_x_at_y - left_x_at_y)
+                dx_cm = (x_span / lane_w_px) * BRUSH_WIDTH_CM
+
+                cm_above = float(np.interp(max(215.5, avg_y - 10.0), y_calib, cm_calib))
+                cm_below = float(np.interp(min(760.0, avg_y + 10.0), y_calib, cm_calib))
+                cm_per_px_y = max(0.05, abs(cm_above - cm_below) / 20.0)
+                dy_cm = tilt_px * cm_per_px_y
+                tilt_deg = round(math.degrees(math.atan2(dy_cm, dx_cm)), 1)
 
             for pt in inliers.astype(int):
                 cv2.circle(traced_image, (pt[0], pt[1]), 3, (0, 0, 255), -1)
@@ -384,28 +406,31 @@ def process_and_trace():
             tracked_curve = np.column_stack((x_vals, y_vals)).astype(np.int32).reshape((-1, 1, 2))
             cv2.polylines(traced_image, [tracked_curve], isClosed=False, color=color_bgr, thickness=2)
 
-            print(f"  [{label:8s}] Inliers: {len(inliers):2d}/{len(hits):2d} | Y={f_y:5.1f} px | Distance={f_cm:4.1f} cm")
-            return f_cm, f_y, len(inliers)
+            print(
+                f"  [{label:8s}] Inliers: {len(inliers):2d}/{len(hits):2d} | Y={f_y:5.1f} px | "
+                f"Distance={f_cm:4.1f} cm | Tilt={tilt_px:+5.1f} px ({tilt_deg:+4.1f} deg)"
+            )
+            return f_cm, f_y, len(inliers), tilt_px, tilt_deg
 
         # Draw Green for Top-Down, Cyan (255, 255, 0) for Bottom-Up
-        top_cm, top_y, top_inliers = fit_clean_front(top_hits, (0, 255, 0), "TOP-DOWN")
-        bot_cm, bot_y, bot_inliers = fit_clean_front(bot_hits, (255, 255, 0), "BOT-UP")
+        top_cm, top_y, top_inliers, top_tilt_px, top_tilt_deg = fit_clean_front(top_hits, (0, 255, 0), "TOP-DOWN")
+        bot_cm, bot_y, bot_inliers, bot_tilt_px, bot_tilt_deg = fit_clean_front(bot_hits, (255, 255, 0), "BOT-UP")
 
         # Arbitrate between Bottom-Up and Top-Down using Left-Line End Anchor
-        front_cm, front_y = None, None
+        front_cm, front_y, front_tilt_px, front_angle_deg = None, None, None, None
         if bot_cm is not None and top_cm is not None:
             # If Top-Down got tricked by glare much higher up (smaller Y) than Bottom-Up, trust Bottom-Up!
             if (bot_y - top_y) > 35.0:
-                front_cm, front_y = bot_cm, bot_y
+                front_cm, front_y, front_tilt_px, front_angle_deg = bot_cm, bot_y, bot_tilt_px, bot_tilt_deg
                 print(f"  ==> ARBITRATION: Top-Down hit upper glare ({top_cm}cm) -> Using BOT-UP ({bot_cm}cm)")
             else:
-                front_cm, front_y = top_cm, top_y
+                front_cm, front_y, front_tilt_px, front_angle_deg = top_cm, top_y, top_tilt_px, top_tilt_deg
                 print(f"  ==> ARBITRATION: Both scans agree -> Using TOP-DOWN ({top_cm}cm)")
         elif bot_cm is not None:
-            front_cm, front_y = bot_cm, bot_y
+            front_cm, front_y, front_tilt_px, front_angle_deg = bot_cm, bot_y, bot_tilt_px, bot_tilt_deg
             print(f"  ==> ARBITRATION: Only BOT-UP valid -> Using BOT-UP ({bot_cm}cm)")
         elif top_cm is not None:
-            front_cm, front_y = top_cm, top_y
+            front_cm, front_y, front_tilt_px, front_angle_deg = top_cm, top_y, top_tilt_px, top_tilt_deg
             print(f"  ==> ARBITRATION: Only TOP-DOWN valid -> Using TOP-DOWN ({top_cm}cm)")
 
         # Cross-check with Left Line End Point (e.g. left line stops at 9 cm right where front edge begins)
@@ -413,17 +438,17 @@ def process_and_trace():
             diff_y = abs(front_y - left_end_y)
             print(f"  ==> CORNER CROSS-CHECK: Front Y={front_y:.1f}px vs Left End Y={left_end_y}px ({left_end_cm}cm) | DeltaY={diff_y:.1f}px")
 
-        return front_cm, front_y
+        return front_cm, front_y, front_tilt_px, front_angle_deg
 
     # Execute Priority 1 (widened during corner stages) and Priority 2 (paused during rotation)
     use_wide_scan = corner_state in ("CORNER_ROTATE", "CORNER_PULL_IN", "CORNER_FINAL_ALIGN")
     left_data = leftTracking(wide_search=use_wide_scan)
 
     if corner_state in ("CORNER_ROTATE", "CORNER_FINAL_ALIGN"):
-        front_cm, front_y = None, None
+        front_cm, front_y, front_tilt_px, front_angle_deg = None, None, None, None
         print("\n--- [PRIORITY 2: FRONT EDGE SCAN PAUSED DURING ROTATION] ---")
     else:
-        front_cm, front_y = frontTracking(
+        front_cm, front_y, front_tilt_px, front_angle_deg = frontTracking(
             left_end_y=left_data["left_end_y"],
             left_end_cm=left_data["left_end_cm"]
         )
@@ -454,6 +479,8 @@ def process_and_trace():
         **left_data,
         "front_cm": front_cm,
         "front_y": front_y,
+        "front_tilt_px": front_tilt_px,
+        "front_angle_deg": front_angle_deg,
     }
 
     return traced_image, latest_image_path, telemetry
@@ -475,7 +502,7 @@ def outputImage(traced_image, image_path):
 # DECISION ARBITRATION (PRIORITY 1: LEFT -> PRIORITY 2: FRONT -> CORNER TURN)
 # ==========================================================
 def decide_movement(telem):
-    global blind_approach_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps, corner_pull_steps
 
     # --- Calibrated Safe Lane Range (50..70 px optimal band) ---
     SAFE_LANE_MIN = 50.0            # Inner safe cruising limit (50 px)
@@ -487,6 +514,8 @@ def decide_movement(telem):
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
     COARSE_ALIGN_MAX_DEG = 12.0     # Must rotate within ±12 deg BEFORE pulling forward with M1
     FINAL_ALIGN_MAX_DEG = 4.0       # Final squared hull tolerance (±4 deg) after pull-in
+    FRONT_TILT_DEADZONE_PX = 10.0   # Front line tilt tolerance before steering M3/M4
+    MAX_FRONT_GUIDE_STEPS = 4       # Max forward steps using front line alone when left line is out of view
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
     HARD_TURN_DURATION = 300        # Strong correction when far outside 50..70 px band
@@ -506,9 +535,12 @@ def decide_movement(telem):
     left_end_cm = telem["left_end_cm"]
     front_cm = telem["front_cm"]
     front_y = telem["front_y"]
+    front_tilt_px = telem.get("front_tilt_px", None)
+    front_angle_deg = telem.get("front_angle_deg", None)
 
     mark_5_in_range = (mark_5_offset is not None and SAFE_LANE_MIN <= mark_5_offset <= SAFE_LANE_MAX)
     angle_display = f"{angle_deg:+.1f} deg" if angle_deg is not None else "None"
+    front_tilt_display = f"{front_tilt_px:+.1f} px ({front_angle_deg:+.1f} deg)" if front_tilt_px is not None else "None"
 
     print("\n" + "=" * 55)
     print(f"TELEMETRY SUMMARY [STATE: {corner_state}]:")
@@ -516,7 +548,7 @@ def decide_movement(telem):
     print(f"  [P1] Est. Line Angle : {angle_display} (Lean={left_lean} px)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
     print(f"  [P1] Near Offset     : {near_offset} px / {near_x_cm} cm (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
-    print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
+    print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px | Tilt={front_tilt_display})")
     print("=" * 55)
 
     # ----------------------------------------------------------
@@ -625,6 +657,7 @@ def decide_movement(telem):
             corner_rotate_steps = 0
             corner_pull_steps = 0
             blind_approach_steps = 0
+            front_guide_steps = 0
             return f"M1 {STEP_DURATION}", False
 
         if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
@@ -637,6 +670,7 @@ def decide_movement(telem):
                 corner_rotate_steps = 0
                 corner_pull_steps = 0
                 blind_approach_steps = 0
+                front_guide_steps = 0
                 return f"M1 {STEP_DURATION}", False
             else:
                 print(f"[CORNER STOP] Lost left line during pull-in after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
@@ -695,6 +729,7 @@ def decide_movement(telem):
             corner_rotate_steps = 0
             corner_pull_steps = 0
             blind_approach_steps = 0
+            front_guide_steps = 0
             return f"M1 {STEP_DURATION}", False
 
         if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
@@ -735,6 +770,7 @@ def decide_movement(telem):
     # ----------------------------------------------------------
     if (has_far_left or valid_count >= 4) and valid_count >= 4:
         blind_approach_steps = 0
+        front_guide_steps = 0
         if front_cm is not None and front_cm > STOP_EDGE_CM:
             print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
 
@@ -802,6 +838,49 @@ def decide_movement(telem):
                 print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
                 return None, True
 
+    # ----------------------------------------------------------
+    # PRIORITY 3: FRONT-LINE FALLBACK ALIGNMENT (WHEN LEFT LINE LOST BUT FRONT LINE TRACKED)
+    # ----------------------------------------------------------
+    if front_cm is not None:
+        if front_cm <= STOP_EDGE_CM:
+            print(
+                f"[PRIORITY 3 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+                f"-> Backing up for safe clearance (M2 300)"
+            )
+            corner_state = "CORNER_BACKUP"
+            front_guide_steps = 0
+            return "M2 300", False
+
+        if front_tilt_px is not None and abs(front_tilt_px) > FRONT_TILT_DEADZONE_PX:
+            if front_guide_steps >= MAX_FRONT_GUIDE_STEPS:
+                print("[STOP - NO LINE] Max front-line alignment tries reached -> STOP MOVING!")
+                return None, True
+
+            front_guide_steps += 1
+            turn_ticks = HARD_TURN_DURATION if abs(front_tilt_px) > 25.0 else MICRO_TURN_DURATION
+            if front_tilt_px > 0:
+                print(
+                    f"[PRIORITY 3 - FRONT ALIGN RIGHT {front_guide_steps}/{MAX_FRONT_GUIDE_STEPS}] "
+                    f"Left line out of view, Front line tilted {front_tilt_display} "
+                    f"(right side closer) -> Steer Right to square up (M4 {turn_ticks})"
+                )
+                return f"M4 {turn_ticks}", False
+            else:
+                print(
+                    f"[PRIORITY 3 - FRONT ALIGN LEFT {front_guide_steps}/{MAX_FRONT_GUIDE_STEPS}] "
+                    f"Left line out of view, Front line tilted {front_tilt_display} "
+                    f"(left side closer) -> Steer Left to square up (M3 {turn_ticks})"
+                )
+                return f"M3 {turn_ticks}", False
+
+        if front_guide_steps < MAX_FRONT_GUIDE_STEPS:
+            front_guide_steps += 1
+            print(
+                f"[PRIORITY 3 - FRONT STRAIGHT GUIDE {front_guide_steps}/{MAX_FRONT_GUIDE_STEPS}] "
+                f"Front line straight ({front_tilt_display}) at {front_cm:.1f} cm -> Step Forward (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
+
     print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
     return None, True
 
@@ -810,8 +889,9 @@ def decide_movement(telem):
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
-    global blind_approach_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps, corner_pull_steps
     blind_approach_steps = 0
+    front_guide_steps = 0
     corner_state = "NORMAL"
     corner_rotate_steps = 0
     corner_pull_steps = 0
