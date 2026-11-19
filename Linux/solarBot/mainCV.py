@@ -594,11 +594,11 @@ def decide_movement(telem):
             return "M6 120", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 3: MOVE FORWARD (M1) UNTIL 5cm MARK LOCKS IN, THEN HAND TO NORMAL
+    # CORNER STATE 3: ALIGN INTO 38..75px LANE BAND (STEER LEFT/RIGHT IF NEEDED)
     # ----------------------------------------------------------
     if corner_state == "CORNER_PULL_IN":
         pull_in_band_ok = (mark_5_offset is not None and 38.0 <= mark_5_offset <= 75.0)
-        line_aligned = (valid_count >= 5 and angle_deg is not None and abs(angle_deg) <= 10.0)
+        line_aligned = (valid_count >= 5 and angle_deg is not None and abs(angle_deg) <= 6.0)
 
         if pull_in_band_ok and line_aligned:
             print(
@@ -627,7 +627,24 @@ def decide_movement(telem):
                     return None, True
 
             corner_pull_steps += 1
-            # If too close to left edge (< 38px) and not already angled right, nudge right so 5cm enters band
+
+            # Too far right (> 75px) or angled away (> +4 deg) -> Steer LEFT (M3) toward line!
+            if (mark_5_offset is not None and mark_5_offset > 75.0) or (angle_deg is not None and angle_deg > 4.0):
+                # If already angled strongly left (<= -6 deg) to come back in, step M1 forward to glide in
+                if angle_deg is not None and angle_deg <= -6.0:
+                    print(
+                        f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
+                        f"5cm={mark_5_offset}px, gliding left at {angle_deg:+.1f} deg -> M1 {STEP_DURATION}"
+                    )
+                    return f"M1 {STEP_DURATION}", False
+
+                print(
+                    f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
+                    f"5cm={mark_5_offset}px (> 75px) / Angle={angle_display} -> Steer Left toward line (M3 {MICRO_TURN_DURATION})"
+                )
+                return f"M3 {MICRO_TURN_DURATION}", False
+
+            # Too close to left edge (< 38px) and not already angled right -> Nudge RIGHT (M4)
             if mark_5_offset is not None and mark_5_offset < 38.0 and (angle_deg is None or angle_deg < 4.0):
                 print(
                     f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
