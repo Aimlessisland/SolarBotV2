@@ -151,8 +151,8 @@ def process_and_trace():
     masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
     traced_image = cv2.cvtColor(masked_edges, cv2.COLOR_GRAY2BGR)
 
-    cm_calib = np.array([65,    60,  55,    50,  45,    40,  35,  30,  25,  20,  15,  10,  5,   0], dtype=float)
-    y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630, 720, 760], dtype=float)
+    cm_calib = np.array([65,    60,  55,    50,  45,    40,  35,  30,  25,  20,  15,  10,    9,     8,     7,     6,     5,   0], dtype=float)
+    y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630.0, 648.0, 666.0, 684.0, 702.0, 720, 760], dtype=float)
 
     left_pts = left_curve.reshape(-1, 2)
     left_poly = np.polyfit(left_pts[:, 1], left_pts[:, 0], 2)
@@ -178,6 +178,10 @@ def process_and_trace():
             20: -23,
             15: -28,
             10: -35,
+            9:  -36,
+            8:  -36,
+            7:  -37,
+            6:  -37,
             5:  -38
         }
         MAX_OFFSET_JUMP_PX = 55 if wide_search else 20
@@ -656,6 +660,7 @@ def decide_movement(telem):
         else:
             print(f"[PRIORITY 1] Heading on intercept course ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
+
     # ----------------------------------------------------------
     # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
     # ----------------------------------------------------------
