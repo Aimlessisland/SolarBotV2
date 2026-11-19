@@ -2,6 +2,7 @@ import os
 import glob
 import time
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 import cv2
@@ -20,15 +21,15 @@ BAUD_RATE = 115200
 
 serial_lock = threading.Lock()
 blind_approach_steps = 0
-corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE" -> "CORNER_PULL_IN"
+corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE"
 corner_rotate_steps = 0
-corner_pull_steps = 0
+frame_history = deque(maxlen=3)  # Short-term memory of last 3 frames
 
 
 def connect_port():
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        time.sleep(2)  # One-time Arduino Uno reset settle[cite: 4]
+        time.sleep(2)  # One-time Arduino Uno reset settle
         ser.reset_input_buffer()
         print(f"[CONNECTED] {SERIAL_PORT} @ {BAUD_RATE} ready!")
         return ser
@@ -41,7 +42,7 @@ def connect_port():
 # COMMAND DISPATCHER (THREAD-SAFE FOR KEYBOARD + WEB)
 # ==========================================================
 def send_command(ser, command):
-    """Sends command over serial and waits for Arduino 'OK'[cite: 4]."""
+    """Sends command over serial and waits for Arduino 'OK'."""
     with serial_lock:
         if ser is None:
             print(f"\n>>> [OFFLINE] COMMAND ISSUED: {command} <<<\n")
@@ -114,7 +115,7 @@ def process_and_trace():
     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray_img, 100, 200)
 
-    # 2. Define Boundaries & Calibration Curves[cite: 4]
+    # 2. Define Boundaries & Calibration Curves
     cx_ratio = 0.482
 
     left_top = (int(w * 0.305), int(h * 0.165))
@@ -153,7 +154,7 @@ def process_and_trace():
     y_calib  = np.array([215.5, 240, 254.5, 280, 300.5, 340, 375, 410, 438, 496, 553, 630, 720, 760], dtype=float)
 
     # ==========================================================
-    # 3. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION / PULL-IN)
+    # 3. PRIORITY 1: LEFT LINE SCAN (WIDENS DURING ROTATION)
     # ==========================================================
     def leftTracking(wide_search=False):
         mode_tag = "WIDE ROTATION SCAN" if wide_search else "NORMAL LANE SCAN"
@@ -182,7 +183,7 @@ def process_and_trace():
         offsets_by_cm = {}
         prev_calibrated_px = None
 
-        # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)[cite: 4]
+        # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)
         for cm in reversed(cm_calib[:-1]):
             cm_key = int(cm)
             base_y = np.interp(cm, cm_calib[::-1], y_calib[::-1])
@@ -205,7 +206,7 @@ def process_and_trace():
                 correction = left_perspective_corrections.get(cm_key, 0)
                 calibrated_px = raw_px + correction
 
-                # Continuity check against previous valid point below it[cite: 4]
+                # Continuity check against previous valid point below it
                 if prev_calibrated_px is not None and abs(calibrated_px - prev_calibrated_px) > MAX_OFFSET_JUMP_PX:
                     print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED jump ({calibrated_px:+4d}px vs prev {prev_calibrated_px:+4d}px)")
                     continue
@@ -245,23 +246,21 @@ def process_and_trace():
         near_count = len(near_offsets)
         near_offset = round(float(np.median(near_offsets)), 1) if near_count > 0 else None
         has_near_left = (near_count >= 2)
-        has_bottom_anchor = (5 in offsets_by_cm or 10 in offsets_by_cm)
         has_far_left = (65 in offsets_by_cm or 60 in offsets_by_cm)
         is_left_valid = (valid_count >= 4) or has_near_left
 
-        # Topmost point where left line stops (detected_points is bottom-to-top, so [-1] is topmost)[cite: 4]
+        # Topmost point where left line stops (detected_points is bottom-to-top, so [-1] is topmost)
         left_end_y = detected_points[-1][1] if len(detected_points) > 0 else None
         left_end_cm = max(offsets_by_cm.keys()) if len(offsets_by_cm) > 0 else None
 
         print(
-            f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {near_count} near, 5/10cm={has_bottom_anchor}) | "
+            f"  ==> Left Valid: {is_left_valid} ({valid_count} pts, {near_count} near) | "
             f"Far Alive: {has_far_left} | Lean: {lean_value} px | Near Offset: {near_offset} px | Ends at Y={left_end_y} px ({left_end_cm} cm)"
         )
         return {
             "is_left_valid": is_left_valid,
             "valid_count": valid_count,
             "has_near_left": has_near_left,
-            "has_bottom_anchor": has_bottom_anchor,
             "has_far_left": has_far_left,
             "left_lean": lean_value,
             "near_offset": near_offset,
@@ -329,11 +328,11 @@ def process_and_trace():
 
         return front_cm, front_y
 
-    # Execute Priority 1 (widened during rotation/pull-in) and Priority 2 (paused during rotation)
-    use_wide_scan = corner_state in ("CORNER_ROTATE", "CORNER_PULL_IN")
-    left_data = leftTracking(wide_search=use_wide_scan)
+    # Execute Priority 1 (widened during rotation) and Priority 2 (paused during rotation)
+    is_rotating = (corner_state == "CORNER_ROTATE")
+    left_data = leftTracking(wide_search=is_rotating)
 
-    if corner_state == "CORNER_ROTATE":
+    if is_rotating:
         front_cm, front_y = None, None
         print("\n--- [PRIORITY 2: FRONT EDGE SCAN PAUSED DURING ROTATION] ---")
     else:
@@ -388,10 +387,10 @@ def outputImage(traced_image, image_path):
 
 
 # ==========================================================
-# DECISION ARBITRATION (PRIORITY 1: LEFT -> PRIORITY 2: FRONT -> CORNER TURN)
+# DECISION ARBITRATION (3-FRAME MEMORY + LEFT/FRONT + CORNER TURN)
 # ==========================================================
 def decide_movement(telem):
-    global blind_approach_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, corner_state, corner_rotate_steps, frame_history
 
     # --- Calibrated Safe Lane Range ---
     SAFE_LANE_MIN = 44.0            # Inner limit (near left tape)
@@ -402,15 +401,13 @@ def decide_movement(telem):
     STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
     STEP_DURATION = 300
-    MICRO_TURN_DURATION = 75
-    HARD_TURN_DURATION = 200
+    MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
+    HARD_TURN_DURATION = 300
     MAX_BLIND_APPROACH_STEPS = 2
     MAX_CORNER_ROTATE_STEPS = 12    # Safety cap so it never spins endlessly if no new edge exists
-    MAX_CORNER_PULL_STEPS = 4       # Max forward pull-in steps to bring 5cm/10cm into range
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
-    has_bottom_anchor = telem.get("has_bottom_anchor", False)
     has_far_left = telem["has_far_left"]
     left_lean = telem["left_lean"]
     near_offset = telem["near_offset"]
@@ -419,13 +416,30 @@ def decide_movement(telem):
     front_cm = telem["front_cm"]
     front_y = telem["front_y"]
 
+    # Record current frame into 3-frame rolling memory
+    frame_history.append({
+        "valid_count": valid_count,
+        "front_cm": front_cm,
+        "left_end_cm": left_end_cm,
+    })
+
+    # Analyze recent 3-frame memory for corner approach confirmation
+    recent_left_seen = any(f["valid_count"] >= 2 for f in frame_history)
+    recent_front_dists = [f["front_cm"] for f in frame_history if f["front_cm"] is not None]
+    recent_front_seen = len(recent_front_dists) >= 1
+    was_approaching_corner = recent_left_seen and recent_front_seen
+    prev_front_cm = frame_history[-2]["front_cm"] if len(frame_history) >= 2 else None
+
+    mem_summary = [(f["valid_count"], f["front_cm"]) for f in frame_history]
+
     print("\n" + "=" * 55)
     print(f"TELEMETRY SUMMARY [STATE: {corner_state}]:")
-    print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} pts, 5/10cm={has_bottom_anchor})")
-    print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
-    print(f"  [P1] Left Lean       : {left_lean} px")
-    print(f"  [P1] Near Offset     : {near_offset} px (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
-    print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px)")
+    print(f"  [MEM] Last 3 Frames  : {mem_summary} (CornerApproach={was_approaching_corner})")
+    print(f"  [P1]  Left Line Valid: {is_left_valid} ({valid_count} continuous pts)")
+    print(f"  [P1]  Far Left Alive : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
+    print(f"  [P1]  Left Lean      : {left_lean} px")
+    print(f"  [P1]  Near Offset    : {near_offset} px (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
+    print(f"  [P2]  Front Edge     : {front_cm} cm (Front Y={front_y} px)")
     print("=" * 55)
 
     # ----------------------------------------------------------
@@ -440,7 +454,6 @@ def decide_movement(telem):
             )
             corner_state = "NORMAL"
             corner_rotate_steps = 0
-            corner_pull_steps = 0
             return f"M1 {STEP_DURATION}", False
 
         if front_cm is None or front_cm >= SAFE_ROTATE_CLEARANCE_CM:
@@ -451,7 +464,6 @@ def decide_movement(telem):
             )
             corner_state = "CORNER_ROTATE"
             corner_rotate_steps = 1
-            corner_pull_steps = 0
             return "M6 800", False
         else:
             print(
@@ -461,37 +473,28 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: COARSE ROTATE UNTIL NEW LINE APPEARS AHEAD
+    # CORNER STATE 2: WIDE LEFT SCAN + M6 120 STEPS UNTIL STRAIGHT LINE LOCKS
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
-        line_visible = (valid_count >= 3)
-        roughly_straight = (left_lean is not None and abs(left_lean) <= 25.0)
+        has_short_line = (valid_count >= 4)
+        is_straight = (left_lean is not None and abs(left_lean) <= 20.0)
+        in_lane_bounds = (near_offset is not None and 15.0 <= near_offset <= 95.0)
 
-        if line_visible and roughly_straight:
-            if not has_bottom_anchor:
-                print(
-                    f"[CORNER PULL-IN] New edge spotted ahead (Pts={valid_count}, Lean={left_lean:+.1f}px), "
-                    f"5cm/10cm not in range yet -> Pull forward (M1 {STEP_DURATION})"
-                )
-                corner_state = "CORNER_PULL_IN"
-                corner_pull_steps = 1
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print(
-                    f"[CORNER TURN COMPLETE] 5cm/10cm anchored & aligned! "
-                    f"(Offset={near_offset}px, Lean={left_lean:+.1f}px) -> Resume Normal (M1 {STEP_DURATION})"
-                )
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                blind_approach_steps = 0
-                return f"M1 {STEP_DURATION}", False
-
-        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
-            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
+        if has_short_line and is_straight and in_lane_bounds:
+            print(
+                f"[CORNER TURN COMPLETE] Aligned to new edge! Switching back to regular tracking "
+                f"(Pts={valid_count}, Offset={near_offset}px, Lean={left_lean:+.1f}px) -> M1 {STEP_DURATION}"
+            )
             corner_state = "NORMAL"
             corner_rotate_steps = 0
-            corner_pull_steps = 0
+            blind_approach_steps = 0
+            frame_history.clear()
+            return f"M1 {STEP_DURATION}", False
+
+        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
+            print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) without locking straight edge -> STOP!")
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
             return None, True
 
         corner_rotate_steps += 1
@@ -502,42 +505,15 @@ def decide_movement(telem):
         return "M6 120", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 3: PULL FORWARD UNTIL 5cm/10cm ENTERS RANGE, THEN SQUARE HULL
+    # CORNER TRIGGER: FRONT LINE <= 10cm + (AT LEAST 1 LEFT PT OR MEMORY CONFIRMED)
     # ----------------------------------------------------------
-    if corner_state == "CORNER_PULL_IN":
-        if not has_bottom_anchor:
-            if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
-                print(f"[CORNER STOP] Could not pull 5cm/10cm into range after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                return None, True
-
-            corner_pull_steps += 1
-            print(
-                f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"Moving forward until 5cm/10cm enters range (Pts={valid_count}, End={left_end_cm}cm) -> M1 {STEP_DURATION}"
-            )
-            return f"M1 {STEP_DURATION}", False
-
-        # Once 5cm/10cm is in range, square hull angle before returning to normal cruising
-        if left_lean is not None and abs(left_lean) > 15.0:
-            if left_lean > 0:
-                print(f"[CORNER FINE ALIGN] 5cm/10cm anchored, squaring hull right (Lean={left_lean:+.1f}px) -> M6 120")
-                return "M6 120", False
-            else:
-                print(f"[CORNER FINE ALIGN] 5cm/10cm anchored, squaring hull left (Lean={left_lean:+.1f}px) -> M3 {MICRO_TURN_DURATION}")
-                return f"M3 {MICRO_TURN_DURATION}", False
-
+    if front_cm is not None and front_cm <= STOP_EDGE_CM and (valid_count >= 1 or was_approaching_corner):
         print(
-            f"[CORNER TURN COMPLETE] 5cm/10cm locked & hull straight! "
-            f"(Offset={near_offset}px, Lean={left_lean}) -> Resume Normal (M1 {STEP_DURATION})"
+            f"[CORNER TRIGGERED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+            f"[LeftPts={valid_count}, MemCorner={was_approaching_corner}] -> Backing up for safe clearance (M2 300)"
         )
-        corner_state = "NORMAL"
-        corner_rotate_steps = 0
-        corner_pull_steps = 0
-        blind_approach_steps = 0
-        return f"M1 {STEP_DURATION}", False
+        corner_state = "CORNER_BACKUP"
+        return "M2 300", False
 
     # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE DETECTED AHEAD -> KEEP GOING & CENTER LANE
@@ -545,16 +521,7 @@ def decide_movement(telem):
     if (has_far_left or valid_count >= 4) and valid_count >= 4:
         blind_approach_steps = 0
         if front_cm is not None and front_cm > STOP_EDGE_CM:
-            print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
-
-        # Only trigger corner turn if front edge <= 10cm AND left line truly ends near the corner (<= 25cm)
-        if front_cm is not None and front_cm <= STOP_EDGE_CM and (left_end_cm is not None and left_end_cm <= 25):
-            print(
-                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm & Left ends at {left_end_cm} cm "
-                f"-> Backing up for safe clearance (M2 300)"
-            )
-            corner_state = "CORNER_BACKUP"
-            return "M2 300", False
+            print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm (> {STOP_EDGE_CM} cm), Left Line alive ahead -> KEEP GOING!")
 
         lane_error = (near_offset - TARGET_OFFSET) if near_offset is not None else 0.0
         angle_error = left_lean if left_lean is not None else 0.0
@@ -576,48 +543,47 @@ def decide_movement(telem):
             return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
-    # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
+    # PRIORITY 2: MEMORY-ASSISTED CORNER APPROACH (LEFT < 4 PTS NEAR EDGE)
     # ----------------------------------------------------------
-    if is_left_valid and not has_far_left:
-        if front_cm is not None:
-            blind_approach_steps = 0
-            if front_cm <= STOP_EDGE_CM:
-                print(
-                    f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
-                    f"-> Backing up for safe clearance (M2 300)"
-                )
-                corner_state = "CORNER_BACKUP"
-                return "M2 300", False
-            else:
-                print(
-                    f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
-                    f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
-        else:
-            if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
-                blind_approach_steps += 1
-                print(
-                    f"[PRIORITY 2 - CORNER APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
-                    f"Left line ended at {left_end_cm} cm, scanning for front line -> Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
-                return None, True
+    if front_cm is not None:
+        blind_approach_steps = 0
+        if front_cm <= STOP_EDGE_CM:
+            print(
+                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+                f"-> Backing up for safe clearance (M2 300)"
+            )
+            corner_state = "CORNER_BACKUP"
+            return "M2 300", False
+        elif valid_count >= 1 or was_approaching_corner:
+            print(
+                f"[PRIORITY 2 - MEMORY APPROACH] Front edge at {front_cm:.1f} cm (> {STOP_EDGE_CM} cm), "
+                f"LeftPts={valid_count}, MemCorner={was_approaching_corner} -> Step Forward to reach corner (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
 
-    # ----------------------------------------------------------
-    # SAFETY FALLBACK: FRONT EDGE REACHED EVEN IF LEFT PTS < 2
-    # ----------------------------------------------------------
-    if front_cm is not None and front_cm <= STOP_EDGE_CM:
+    # If front edge was just seen <= 16cm on the previous frame and just slipped past the bottom lip:
+    if front_cm is None and was_approaching_corner and prev_front_cm is not None and prev_front_cm <= 16.0:
         print(
-            f"[PRIORITY 2 - CORNER DETECTED] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) "
+            f"[PRIORITY 2 - MEMORY CORNER TRIGGER] Front edge was {prev_front_cm:.1f} cm on last frame & reached lip "
             f"-> Backing up for safe clearance (M2 300)"
         )
         corner_state = "CORNER_BACKUP"
         return "M2 300", False
 
-    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
+    # Blind approach when left line ended and front edge not in view yet
+    if (valid_count >= 1 or was_approaching_corner) and not has_far_left:
+        if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
+            blind_approach_steps += 1
+            print(
+                f"[PRIORITY 2 - CORNER APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
+                f"LeftPts={valid_count}, MemCorner={was_approaching_corner}, scanning for front edge -> Step Forward (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
+        else:
+            print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
+            return None, True
+
+    print("[STOP - NO LINE] Left line lost (insufficient points & no corner memory) -> STOP MOVING!")
     return None, True
 
 
@@ -625,11 +591,11 @@ def decide_movement(telem):
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
-    global blind_approach_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, corner_state, corner_rotate_steps, frame_history
     blind_approach_steps = 0
     corner_state = "NORMAL"
     corner_rotate_steps = 0
-    corner_pull_steps = 0
+    frame_history.clear()
 
     print("\n==========================================")
     print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
@@ -655,7 +621,7 @@ def auto_drive_step_by_step(ser):
 
             if cmd is not None:
                 send_command(ser, cmd)
-                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo[cite: 4]
+                time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo
 
             if should_stop:
                 print(f"[AUTO COMPLETE] Stop condition reached after {step_count} cycle(s).")
@@ -671,7 +637,7 @@ def auto_drive_step_by_step(ser):
 # MOBILE / WEB CONTROL BRIDGE (PORT 5000)
 # ==========================================================
 def mobileControl(ser):
-    """Starts background HTTP listener on port 5000 for Node.js / Web commands[cite: 4]."""
+    """Starts background HTTP listener on port 5000 for Node.js / Web commands."""
     class WebCmdHandler(BaseHTTPRequestHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
