@@ -594,31 +594,52 @@ def decide_movement(telem):
             return "M6 120", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 3: MOVE FORWARD (M1) UNTIL 5cm MARK IS IN 50..70px
+    # CORNER STATE 3: MOVE FORWARD (M1) UNTIL 5cm MARK LOCKS IN, THEN HAND TO NORMAL
     # ----------------------------------------------------------
     if corner_state == "CORNER_PULL_IN":
-        if not mark_5_in_range:
+        pull_in_band_ok = (mark_5_offset is not None and 38.0 <= mark_5_offset <= 75.0)
+        line_aligned = (valid_count >= 5 and angle_deg is not None and abs(angle_deg) <= 10.0)
+
+        if pull_in_band_ok and line_aligned:
+            print(
+                f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px & aligned ({angle_deg:+.1f} deg) "
+                f"-> Continuing final rotation to straighten hull!"
+            )
+            corner_state = "CORNER_FINAL_ALIGN"
+            corner_rotate_steps = 0
+        else:
             if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
-                print(f"[CORNER STOP] Could not bring 5cm mark into 50..70px after {MAX_CORNER_PULL_STEPS} M1 steps -> STOP!")
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                return None, True
+                if valid_count >= 4:
+                    print(
+                        f"[CORNER SOFT-HANDOFF] 5cm={mark_5_offset}px after {MAX_CORNER_PULL_STEPS} pull steps, "
+                        f"line valid ({valid_count} pts) -> Handing over to NORMAL lane tracking (M1 {STEP_DURATION})"
+                    )
+                    corner_state = "NORMAL"
+                    corner_rotate_steps = 0
+                    corner_pull_steps = 0
+                    blind_approach_steps = 0
+                    return f"M1 {STEP_DURATION}", False
+                else:
+                    print(f"[CORNER STOP] Lost left line during pull-in after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
+                    corner_state = "NORMAL"
+                    corner_rotate_steps = 0
+                    corner_pull_steps = 0
+                    return None, True
 
             corner_pull_steps += 1
+            # If too close to left edge (< 38px) and not already angled right, nudge right so 5cm enters band
+            if mark_5_offset is not None and mark_5_offset < 38.0 and (angle_deg is None or angle_deg < 4.0):
+                print(
+                    f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
+                    f"5cm too close ({mark_5_offset}px < 38px) -> Nudge Right (M4 {MICRO_TURN_DURATION})"
+                )
+                return f"M4 {MICRO_TURN_DURATION}", False
+
             print(
                 f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 50..70px -> M1 {STEP_DURATION}"
+                f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 38..75px -> M1 {STEP_DURATION}"
             )
             return f"M1 {STEP_DURATION}", False
-
-        print(
-            f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px (inside 50..70px, Angle={angle_display}) "
-            f"-> Continuing final rotation to straighten hull!"
-        )
-        corner_state = "CORNER_FINAL_ALIGN"
-        corner_rotate_steps = 0
-
     # ----------------------------------------------------------
     # CORNER STATE 4: CONTINUE ROTATING UNTIL HULL ANGLE <= ±4.0 DEG
     # ----------------------------------------------------------
