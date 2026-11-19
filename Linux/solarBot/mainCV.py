@@ -185,11 +185,13 @@ def process_and_trace():
             5:  -38
         }
         MAX_OFFSET_JUMP_PX = 55 if wide_search else 20
+        MAX_CM_GAP = 15 if wide_search else 10
 
         detected_points = []
         offsets_by_cm = {}
         x_cm_by_y_cm = {}
         prev_calibrated_px = None
+        prev_cm = None
 
         # Scan bottom-to-top (5 cm near brush -> 65 cm far ahead)
         for cm in reversed(cm_calib[:-1]):
@@ -216,6 +218,11 @@ def process_and_trace():
                 correction = left_perspective_corrections.get(cm_key, 0)
                 calibrated_px = raw_px + correction
 
+                # Prevent jumping across large empty gaps onto stray glare far ahead
+                if prev_cm is not None and (cm_key - prev_cm) > MAX_CM_GAP:
+                    print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED gap ({cm_key}cm vs prev {prev_cm}cm > {MAX_CM_GAP}cm)")
+                    continue
+
                 # Continuity check against previous valid point below it
                 if prev_calibrated_px is not None and abs(calibrated_px - prev_calibrated_px) > MAX_OFFSET_JUMP_PX:
                     print(f"  [Left  {cm_key:2d}cm] Y={target_y:3d} | REJECTED jump ({calibrated_px:+4d}px vs prev {prev_calibrated_px:+4d}px)")
@@ -225,6 +232,7 @@ def process_and_trace():
                 x_cm = round((calibrated_px / lane_width_px) * BRUSH_WIDTH_CM, 2)
 
                 prev_calibrated_px = calibrated_px
+                prev_cm = cm_key
                 offsets_by_cm[cm_key] = calibrated_px
                 x_cm_by_y_cm[cm_key] = x_cm
                 detected_points.append((edge_x, target_y))
@@ -654,21 +662,23 @@ def decide_movement(telem):
             return "M5 250", False
 
     # ----------------------------------------------------------
+    # IMMEDIATE FRONT EDGE GUARD: NEVER DRIVE FORWARD WHEN FRONT EDGE <= 10.0 cm
+    # ----------------------------------------------------------
+    if front_cm is not None and front_cm <= STOP_EDGE_CM:
+        print(
+            f"[CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+            f"-> Backing up for safe clearance (M2 300)"
+        )
+        corner_state = "CORNER_BACKUP"
+        return "M2 300", False
+
+    # ----------------------------------------------------------
     # PRIORITY 1A: LEFT LINE DETECTED AHEAD -> KEEP GOING & CENTER LANE
     # ----------------------------------------------------------
     if (has_far_left or valid_count >= 4) and valid_count >= 4:
         blind_approach_steps = 0
         if front_cm is not None and front_cm > STOP_EDGE_CM:
             print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
-
-        # Only trigger corner turn if front edge <= 10cm AND left line truly ends near the corner (<= 25cm)
-        if front_cm is not None and front_cm <= STOP_EDGE_CM and (left_end_cm is not None and left_end_cm <= 25):
-            print(
-                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm & Left ends at {left_end_cm} cm "
-                f"-> Backing up for safe clearance (M2 300)"
-            )
-            corner_state = "CORNER_BACKUP"
-            return "M2 300", False
 
         lane_error = (near_offset - TARGET_OFFSET) if near_offset is not None else 0.0
         cur_angle = angle_deg if angle_deg is not None else 0.0
@@ -717,19 +727,11 @@ def decide_movement(telem):
     if is_left_valid and not has_far_left:
         if front_cm is not None:
             blind_approach_steps = 0
-            if front_cm <= STOP_EDGE_CM:
-                print(
-                    f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
-                    f"-> Backing up for safe clearance (M2 300)"
-                )
-                corner_state = "CORNER_BACKUP"
-                return "M2 300", False
-            else:
-                print(
-                    f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
-                    f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
+            print(
+                f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
+                f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
         else:
             if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
                 blind_approach_steps += 1
@@ -741,17 +743,6 @@ def decide_movement(telem):
             else:
                 print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
                 return None, True
-
-    # ----------------------------------------------------------
-    # SAFETY FALLBACK: FRONT EDGE REACHED EVEN IF LEFT PTS < 2
-    # ----------------------------------------------------------
-    if front_cm is not None and front_cm <= STOP_EDGE_CM:
-        print(
-            f"[PRIORITY 2 - CORNER DETECTED] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) "
-            f"-> Backing up for safe clearance (M2 300)"
-        )
-        corner_state = "CORNER_BACKUP"
-        return "M2 300", False
 
     print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
     return None, True
