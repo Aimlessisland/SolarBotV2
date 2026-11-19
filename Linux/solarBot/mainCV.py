@@ -206,8 +206,8 @@ def process_and_trace():
                 search_start = max(0, left_x - 60)
                 search_end = min(w, left_x + 320)
             else:
-                search_start = max(0, left_x - 30)
-                search_end = min(w, left_x + 110)
+                search_start = max(0, left_x - 35)
+                search_end = min(w, left_x + 180)
 
             search_window = masked_edges[target_y, search_start:search_end]
             white_pixels = np.where(search_window > 0)[0]
@@ -485,7 +485,7 @@ def decide_movement(telem):
     LANE_GAIN = 1.0
     STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
-    COARSE_ALIGN_MAX_DEG = 12.0     # Must rotate within ±12 deg BEFORE pulling forward with M1
+    COARSE_ALIGN_MAX_DEG = 6.0      # Must rotate within ±6 deg BEFORE pulling forward with M1
     FINAL_ALIGN_MAX_DEG = 4.0       # Final squared hull tolerance (±4 deg) after pull-in
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
@@ -597,7 +597,7 @@ def decide_movement(telem):
     # CORNER STATE 3: FINISH ROTATION IF UNDER-ROTATED (> +6 DEG), ELSE PULL INTO 38..75px
     # ----------------------------------------------------------
     if corner_state == "CORNER_PULL_IN":
-        # If still under-rotated (e.g. +17 deg like front_0136), finish rotating right with M6 300!
+        # If still under-rotated, finish rotating right with M6 300!
         if angle_deg is not None and angle_deg > COARSE_ALIGN_MAX_DEG:
             if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
                 print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
@@ -629,6 +629,17 @@ def decide_movement(telem):
 
         if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
             if valid_count >= 4:
+                if angle_deg is not None and angle_deg > 5.0:
+                    print(
+                        f"[CORNER SOFT-HANDOFF ROTATE] Angle still +{angle_deg:.1f} deg (> +5.0 deg) "
+                        f"-> Final Rotate Right before NORMAL (M6 300)"
+                    )
+                    corner_state = "NORMAL"
+                    corner_rotate_steps = 0
+                    corner_pull_steps = 0
+                    blind_approach_steps = 0
+                    return "M6 300", False
+
                 print(
                     f"[CORNER SOFT-HANDOFF] 5cm={mark_5_offset}px after {MAX_CORNER_PULL_STEPS} pull steps, "
                     f"line valid ({valid_count} pts) -> Handing over to NORMAL lane tracking (M1 {STEP_DURATION})"
