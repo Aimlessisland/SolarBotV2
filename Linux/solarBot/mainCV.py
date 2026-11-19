@@ -301,10 +301,10 @@ def process_and_trace():
         }
 
     # ==========================================================
-    # 4. PRIORITY 2: FRONT EDGE SCAN
+    # 4. PRIORITY 2: BIDIRECTIONAL FRONT EDGE SCAN (BOTTOM-UP + TOP-DOWN)
     # ==========================================================
-    def frontTracking():
-        print("\n--- [PRIORITY 2: FRONT EDGE SCAN REPORT] ---")
+    def frontTracking(left_end_y=None, left_end_cm=None):
+        print("\n--- [PRIORITY 2: BIDIRECTIONAL FRONT EDGE SCAN REPORT] ---")
         width_steps = np.linspace(10, 60, 25, dtype=int)
         front_pts = front_curve.reshape(-1, 2)
         front_poly = np.polyfit(front_pts[:, 0], front_pts[:, 1], 2)
@@ -314,7 +314,8 @@ def process_and_trace():
         x_start_top, x_end_top = front_left[0], front_right[0]
         x_start_bot, x_end_bot = left_bot[0], right_bot[0]
 
-        detected_points = []
+        top_hits = []
+        bot_hits = []
 
         for width_pos in width_steps:
             tx_top = int(np.interp(width_pos, [0, 71], [x_start_top, x_end_top]))
@@ -326,37 +327,83 @@ def process_and_trace():
             y_samples = np.linspace(top_y, bottom_y, num_samples, dtype=int)
             x_samples = np.linspace(tx_top, tx_bot, num_samples, dtype=int)
 
+            # 4A. Top-Down Ray (65 cm -> 0 cm)
             for y, x in zip(y_samples, x_samples):
                 x_l = max(0, x - 3)
                 x_r = min(w, x + 4)
                 y_t = max(0, y - 1)
                 y_b = min(h, y + 2)
-
-                search_window = masked_edges[y_t:y_b, x_l:x_r]
-                if np.any(search_window > 0):
-                    edge_pt = (x, y)
-                    detected_points.append(edge_pt)
-                    cv2.line(traced_image, (tx_top, top_y), (tx_bot, bottom_y), (0, 255, 0), 1)
-                    cv2.circle(traced_image, edge_pt, 3, (0, 0, 255), -1)
+                if np.any(masked_edges[y_t:y_b, x_l:x_r] > 0):
+                    top_hits.append((x, y))
                     break
 
-        front_cm = None
-        front_y = None
-        if len(detected_points) >= 5:
-            detected_arr = np.array(detected_points, dtype=np.float64)
-            avg_y = float(np.mean(detected_arr[:, 1]))
-            front_y = round(avg_y, 1)
-            front_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
+            # 4B. Bottom-Up Ray (0 cm brush -> 65 cm, ignores glare above front edge)
+            # Start 12 px above brush curve so brush curve border itself never false-triggers
+            for y, x in zip(y_samples[::-1], x_samples[::-1]):
+                if y > bottom_y - 12:
+                    continue
+                x_l = max(0, x - 3)
+                x_r = min(w, x + 4)
+                y_t = max(0, y - 1)
+                y_b = min(h, y + 2)
+                if np.any(masked_edges[y_t:y_b, x_l:x_r] > 0):
+                    bot_hits.append((x, y))
+                    break
 
-            poly_tracked = np.polyfit(detected_arr[:, 0], detected_arr[:, 1], 2)
-            x_vals = np.linspace(detected_arr[:, 0].min(), detected_arr[:, 0].max(), 60)
+        def fit_clean_front(hits, color_bgr, label):
+            if len(hits) < 5:
+                print(f"  [{label:8s}] Hits: {len(hits):2d}/25 (Insufficient)")
+                return None, None, 0
+
+            arr = np.array(hits, dtype=np.float64)
+            med_y = float(np.median(arr[:, 1]))
+            # Reject glare/noise outliers > 25 px away from median Y
+            inliers = arr[np.abs(arr[:, 1] - med_y) <= 25.0]
+            if len(inliers) < 5:
+                print(f"  [{label:8s}] Hits: {len(hits):2d}/25 -> Only {len(inliers)} inliers near Y={med_y:.1f}px (Scattered glare)")
+                return None, None, len(inliers)
+
+            avg_y = float(np.mean(inliers[:, 1]))
+            f_y = round(avg_y, 1)
+            f_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
+
+            for pt in inliers.astype(int):
+                cv2.circle(traced_image, (pt[0], pt[1]), 3, (0, 0, 255), -1)
+
+            poly_tracked = np.polyfit(inliers[:, 0], inliers[:, 1], 2)
+            x_vals = np.linspace(inliers[:, 0].min(), inliers[:, 0].max(), 60)
             y_vals = np.polyval(poly_tracked, x_vals)
             tracked_curve = np.column_stack((x_vals, y_vals)).astype(np.int32).reshape((-1, 1, 2))
-            cv2.polylines(traced_image, [tracked_curve], isClosed=False, color=(0, 255, 0), thickness=2)
+            cv2.polylines(traced_image, [tracked_curve], isClosed=False, color=color_bgr, thickness=2)
 
-            print(f"  -> Hits Found: {len(detected_points)}/25 points | Front Edge Y: {front_y:.1f} px | Distance: {front_cm:.1f} cm")
-        else:
-            print(f"  -> Hits Found: {len(detected_points)}/25 (Insufficient for front edge)")
+            print(f"  [{label:8s}] Inliers: {len(inliers):2d}/{len(hits):2d} | Y={f_y:5.1f} px | Distance={f_cm:4.1f} cm")
+            return f_cm, f_y, len(inliers)
+
+        # Draw Green for Top-Down, Cyan (255, 255, 0) for Bottom-Up
+        top_cm, top_y, top_inliers = fit_clean_front(top_hits, (0, 255, 0), "TOP-DOWN")
+        bot_cm, bot_y, bot_inliers = fit_clean_front(bot_hits, (255, 255, 0), "BOT-UP")
+
+        # Arbitrate between Bottom-Up and Top-Down using Left-Line End Anchor
+        front_cm, front_y = None, None
+        if bot_cm is not None and top_cm is not None:
+            # If Top-Down got tricked by glare much higher up (smaller Y) than Bottom-Up, trust Bottom-Up!
+            if (bot_y - top_y) > 35.0:
+                front_cm, front_y = bot_cm, bot_y
+                print(f"  ==> ARBITRATION: Top-Down hit upper glare ({top_cm}cm) -> Using BOT-UP ({bot_cm}cm)")
+            else:
+                front_cm, front_y = top_cm, top_y
+                print(f"  ==> ARBITRATION: Both scans agree -> Using TOP-DOWN ({top_cm}cm)")
+        elif bot_cm is not None:
+            front_cm, front_y = bot_cm, bot_y
+            print(f"  ==> ARBITRATION: Only BOT-UP valid -> Using BOT-UP ({bot_cm}cm)")
+        elif top_cm is not None:
+            front_cm, front_y = top_cm, top_y
+            print(f"  ==> ARBITRATION: Only TOP-DOWN valid -> Using TOP-DOWN ({top_cm}cm)")
+
+        # Cross-check with Left Line End Point (e.g. left line stops at 9 cm right where front edge begins)
+        if front_y is not None and left_end_y is not None and left_end_cm is not None and left_end_cm <= 25:
+            diff_y = abs(front_y - left_end_y)
+            print(f"  ==> CORNER CROSS-CHECK: Front Y={front_y:.1f}px vs Left End Y={left_end_y}px ({left_end_cm}cm) | DeltaY={diff_y:.1f}px")
 
         return front_cm, front_y
 
@@ -368,7 +415,10 @@ def process_and_trace():
         front_cm, front_y = None, None
         print("\n--- [PRIORITY 2: FRONT EDGE SCAN PAUSED DURING ROTATION] ---")
     else:
-        front_cm, front_y = frontTracking()
+        front_cm, front_y = frontTracking(
+            left_end_y=left_data["left_end_y"],
+            left_end_cm=left_data["left_end_cm"]
+        )
 
     # 5. Draw Boundary Overlays
     cv2.polylines(traced_image, [left_curve], isClosed=False, color=(128, 0, 128), thickness=2)
