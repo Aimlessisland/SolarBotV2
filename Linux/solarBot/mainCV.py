@@ -662,11 +662,12 @@ def decide_movement(telem):
             return "M5 250", False
 
     # ----------------------------------------------------------
-    # IMMEDIATE FRONT EDGE GUARD: NEVER DRIVE FORWARD WHEN FRONT EDGE <= 10.0 cm
+    # IMMEDIATE FRONT EDGE GUARD: ONLY TURN IF LEFT LINE ENDS NEAR CORNER (IGNORE PANEL SEAMS)
     # ----------------------------------------------------------
-    if front_cm is not None and front_cm <= STOP_EDGE_CM:
+    left_ends_near_corner = (not has_far_left) and (left_end_cm is None or left_end_cm <= 25)
+    if front_cm is not None and front_cm <= STOP_EDGE_CM and left_ends_near_corner:
         print(
-            f"[CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+            f"[CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) & Left ends at {left_end_cm} cm "
             f"-> Backing up for safe clearance (M2 300)"
         )
         corner_state = "CORNER_BACKUP"
