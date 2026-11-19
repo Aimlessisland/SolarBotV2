@@ -23,9 +23,8 @@ BRUSH_WIDTH_CM = 71.0
 serial_lock = threading.Lock()
 blind_approach_steps = 0
 front_guide_steps = 0
-corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE" -> "CORNER_PULL_IN" -> "CORNER_FINAL_ALIGN"
+corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE" -> "NORMAL"
 corner_rotate_steps = 0
-corner_pull_steps = 0
 
 
 def connect_port():
@@ -185,7 +184,7 @@ def process_and_trace():
             6:  -37,
             5:  -38
         }
-        MAX_OFFSET_JUMP_PX = 55 if wide_search else 20
+        MAX_OFFSET_JUMP_PX = 55 if wide_search else 22
         MAX_CM_GAP = 15 if wide_search else 10
 
         detected_points = []
@@ -207,8 +206,8 @@ def process_and_trace():
                 search_start = max(0, left_x - 60)
                 search_end = min(w, left_x + 320)
             else:
-                search_start = max(0, left_x - 30)
-                search_end = min(w, left_x + 110)
+                search_start = max(0, left_x - 35)
+                search_end = min(w, left_x + 170)
 
             search_window = masked_edges[target_y, search_start:search_end]
             white_pixels = np.where(search_window > 0)[0]
@@ -377,8 +376,8 @@ def process_and_trace():
             f_cm = round(float(np.interp(avg_y, y_calib, cm_calib)), 1)
 
             # Calculate front-line straightness (tilt: Y_right - Y_left)
-            # Positive tilt (+px) = right side is lower/closer than left -> nose angled left -> steer right (M4)
-            # Negative tilt (-px) = left side is lower/closer than right -> nose angled right -> steer left (M3)
+            # Positive tilt (+px) = right side is lower/closer than left -> steer right (M4)
+            # Negative tilt (-px) = left side is lower/closer than right -> steer left (M3)
             x_span = float(inliers[:, 0].max() - inliers[:, 0].min())
             tilt_px = 0.0
             tilt_deg = 0.0
@@ -440,11 +439,11 @@ def process_and_trace():
 
         return front_cm, front_y, front_tilt_px, front_angle_deg
 
-    # Execute Priority 1 (widened during corner stages) and Priority 2 (paused during rotation)
-    use_wide_scan = corner_state in ("CORNER_ROTATE", "CORNER_PULL_IN", "CORNER_FINAL_ALIGN")
+    # Execute Priority 1 (widened during corner rotation) and Priority 2 (paused during rotation)
+    use_wide_scan = (corner_state == "CORNER_ROTATE")
     left_data = leftTracking(wide_search=use_wide_scan)
 
-    if corner_state in ("CORNER_ROTATE", "CORNER_FINAL_ALIGN"):
+    if use_wide_scan:
         front_cm, front_y, front_tilt_px, front_angle_deg = None, None, None, None
         print("\n--- [PRIORITY 2: FRONT EDGE SCAN PAUSED DURING ROTATION] ---")
     else:
@@ -499,29 +498,26 @@ def outputImage(traced_image, image_path):
 
 
 # ==========================================================
-# DECISION ARBITRATION (PRIORITY 1: LEFT -> PRIORITY 2: FRONT -> CORNER TURN)
+# DECISION ARBITRATION (CONTINUOUS LANE-KEEPING + CORNER TURN + FRONT FALLBACK)
 # ==========================================================
 def decide_movement(telem):
-    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps
 
-    # --- Calibrated Safe Lane Range (50..70 px optimal band) ---
-    SAFE_LANE_MIN = 50.0            # Inner safe cruising limit (50 px)
-    SAFE_LANE_MAX = 70.0            # Outer safe cruising limit (70 px)
-    TARGET_OFFSET = 60.0            # Midpoint of [50px .. 70px]
-    DEADZONE = 10.0                 # 60 ± 10 px keeps robot strictly inside 50..70 px
-    LANE_GAIN = 1.0
+    # --- Calibrated Safe Lane Range (Matches 5cm=+45px .. 50cm=+60px ideal profile) ---
+    SAFE_LANE_MIN = 45.0            # Inner safe cruising limit (45 px)
+    SAFE_LANE_MAX = 65.0            # Outer safe cruising limit (65 px)
+    TARGET_OFFSET = 55.0            # Midpoint of [45px .. 65px]
+    IDEAL_CRUISE_ANGLE = 2.0        # Natural perspective slope when centered (+45px near -> +60px far)
     STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
-    COARSE_ALIGN_MAX_DEG = 12.0     # Must rotate within ±12 deg BEFORE pulling forward with M1
-    FINAL_ALIGN_MAX_DEG = 4.0       # Final squared hull tolerance (±4 deg) after pull-in
+    ROTATE_HANDOFF_MAX_DEG = 15.0   # Hand off to active NORMAL lane steering once within ±15 deg
     FRONT_TILT_DEADZONE_PX = 10.0   # Front line tilt tolerance before steering M3/M4
-    MAX_FRONT_GUIDE_STEPS = 4       # Max forward steps using front line alone when left line is out of view
+    MAX_FRONT_GUIDE_STEPS = 4       # Max recovery steps using front line alone when left line is lost
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
-    HARD_TURN_DURATION = 300        # Strong correction when far outside 50..70 px band
+    HARD_TURN_DURATION = 300        # Strong correction when far outside 45..65 px band
     MAX_BLIND_APPROACH_STEPS = 2
     MAX_CORNER_ROTATE_STEPS = 12    # Safety cap so it never spins endlessly
-    MAX_CORNER_PULL_STEPS = 5       # Max M1 steps to bring 5cm mark into 50..70 px
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -538,14 +534,14 @@ def decide_movement(telem):
     front_tilt_px = telem.get("front_tilt_px", None)
     front_angle_deg = telem.get("front_angle_deg", None)
 
-    mark_5_in_range = (mark_5_offset is not None and SAFE_LANE_MIN <= mark_5_offset <= SAFE_LANE_MAX)
+    in_target_band = (near_offset is not None and SAFE_LANE_MIN <= near_offset <= SAFE_LANE_MAX)
     angle_display = f"{angle_deg:+.1f} deg" if angle_deg is not None else "None"
     front_tilt_display = f"{front_tilt_px:+.1f} px ({front_angle_deg:+.1f} deg)" if front_tilt_px is not None else "None"
 
     print("\n" + "=" * 55)
     print(f"TELEMETRY SUMMARY [STATE: {corner_state}]:")
-    print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} pts, 5cm={mark_5_offset}px, In50..70={mark_5_in_range})")
-    print(f"  [P1] Est. Line Angle : {angle_display} (Lean={left_lean} px)")
+    print(f"  [P1] Left Line Valid : {is_left_valid} ({valid_count} pts, 5cm={mark_5_offset}px, In45..65={in_target_band})")
+    print(f"  [P1] Est. Line Angle : {angle_display} (Lean={left_lean} px, Target={IDEAL_CRUISE_ANGLE:+.1f} deg)")
     print(f"  [P1] Far Left Alive  : {has_far_left} (Ends at Y={left_end_y} px / {left_end_cm} cm)")
     print(f"  [P1] Near Offset     : {near_offset} px / {near_x_cm} cm (Safe Band: {SAFE_LANE_MIN}..{SAFE_LANE_MAX} px)")
     print(f"  [P2] Front Edge      : {front_cm} cm (Front Y={front_y} px | Tilt={front_tilt_display})")
@@ -563,7 +559,6 @@ def decide_movement(telem):
             )
             corner_state = "NORMAL"
             corner_rotate_steps = 0
-            corner_pull_steps = 0
             return f"M1 {STEP_DURATION}", False
 
         if front_cm is None or front_cm >= SAFE_ROTATE_CLEARANCE_CM:
@@ -574,7 +569,6 @@ def decide_movement(telem):
             )
             corner_state = "CORNER_ROTATE"
             corner_rotate_steps = 1
-            corner_pull_steps = 0
             return "M6 800", False
         else:
             print(
@@ -584,174 +578,38 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: ROTATE RIGHT (M6 300) UNTIL ANGLE <= ±12.0 DEG
+    # CORNER STATE 2: ROTATE RIGHT (M6 300) UNTIL NEW EDGE LOCKED, THEN HAND OFF TO NORMAL STEERING
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
-        angle_within_coarse = (
-            valid_count >= 3
+        new_edge_locked = (
+            valid_count >= 5
             and angle_deg is not None
-            and abs(angle_deg) <= COARSE_ALIGN_MAX_DEG
+            and abs(angle_deg) <= ROTATE_HANDOFF_MAX_DEG
         )
 
-        if angle_within_coarse:
-            if not mark_5_in_range:
-                print(
-                    f"[CORNER PULL-IN START] Angle within {COARSE_ALIGN_MAX_DEG} deg ({angle_deg:+.1f} deg, Pts={valid_count}), "
-                    f"moving M1 forward until 5cm mark ({mark_5_offset}px) sits in 50..70px -> M1 {STEP_DURATION}"
-                )
-                corner_state = "CORNER_PULL_IN"
-                corner_pull_steps = 1
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print(
-                    f"[CORNER FINAL ALIGN] Angle {angle_deg:+.1f} deg & 5cm mark already in 50..70px ({mark_5_offset}px) "
-                    f"-> Checking final hull square"
-                )
-                corner_state = "CORNER_FINAL_ALIGN"
-                corner_rotate_steps = 0
-
+        if new_edge_locked:
+            print(
+                f"[CORNER PIVOT LOCKED] New edge seen ({angle_deg:+.1f} deg, 5cm={mark_5_offset}px, Pts={valid_count}) "
+                f"-> Switching immediately to active NORMAL lane steering!"
+            )
+            corner_state = "NORMAL"
+            corner_rotate_steps = 0
+            blind_approach_steps = 0
+            front_guide_steps = 0
+            # Fall straight through to Priority 1A below so it steers M3/M4 on this exact frame!
         else:
             if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
                 print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
                 corner_state = "NORMAL"
                 corner_rotate_steps = 0
-                corner_pull_steps = 0
                 return None, True
 
             corner_rotate_steps += 1
             print(
                 f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 300"
+                f"Angle={angle_display} (Need <= ±{ROTATE_HANDOFF_MAX_DEG} deg, Pts={valid_count}) -> M6 300"
             )
             return "M6 300", False
-
-    # ----------------------------------------------------------
-    # CORNER STATE 3: FINISH ROTATION IF UNDER-ROTATED (> +12 DEG), ELSE PULL INTO 38..75px
-    # ----------------------------------------------------------
-    if corner_state == "CORNER_PULL_IN":
-        # If still under-rotated, finish rotating right with M6 300!
-        if angle_deg is not None and angle_deg > COARSE_ALIGN_MAX_DEG:
-            if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
-                print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                return None, True
-
-            corner_rotate_steps += 1
-            print(
-                f"[CORNER FINISH ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"Under-rotated ({angle_deg:+.1f} deg > +{COARSE_ALIGN_MAX_DEG} deg) -> M6 300"
-            )
-            return "M6 300", False
-
-        pull_in_band_ok = (mark_5_offset is not None and 38.0 <= mark_5_offset <= 75.0)
-        line_aligned = (valid_count >= 5 and angle_deg is not None and abs(angle_deg) <= 6.0)
-
-        if pull_in_band_ok and line_aligned:
-            print(
-                f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px & aligned ({angle_deg:+.1f} deg) "
-                f"-> Resume Normal (M1 {STEP_DURATION})"
-            )
-            corner_state = "NORMAL"
-            corner_rotate_steps = 0
-            corner_pull_steps = 0
-            blind_approach_steps = 0
-            front_guide_steps = 0
-            return f"M1 {STEP_DURATION}", False
-
-        if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
-            if valid_count >= 4:
-                print(
-                    f"[CORNER SOFT-HANDOFF] 5cm={mark_5_offset}px after {MAX_CORNER_PULL_STEPS} pull steps, "
-                    f"line valid ({valid_count} pts) -> Handing over to NORMAL lane tracking (M1 {STEP_DURATION})"
-                )
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                blind_approach_steps = 0
-                front_guide_steps = 0
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print(f"[CORNER STOP] Lost left line during pull-in after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
-                corner_state = "NORMAL"
-                corner_rotate_steps = 0
-                corner_pull_steps = 0
-                return None, True
-
-        corner_pull_steps += 1
-
-        # Angle is already <= +12 deg, so if 5cm > 75px, steer left (M3) to glide into band
-        if mark_5_offset is not None and mark_5_offset > 75.0:
-            if angle_deg is not None and angle_deg <= -5.0:
-                print(
-                    f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                    f"5cm={mark_5_offset}px, gliding left at {angle_deg:+.1f} deg -> M1 {STEP_DURATION}"
-                )
-                return f"M1 {STEP_DURATION}", False
-
-            print(
-                f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"5cm={mark_5_offset}px (> 75px) & Angle={angle_display} -> Steer Left toward line (M3 {MICRO_TURN_DURATION})"
-            )
-            return f"M3 {MICRO_TURN_DURATION}", False
-
-        # Too close to left edge (< 38px) -> Nudge right (M4)
-        if mark_5_offset is not None and mark_5_offset < 38.0 and (angle_deg is None or angle_deg < 4.0):
-            print(
-                f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"5cm too close ({mark_5_offset}px < 38px) -> Nudge Right (M4 {MICRO_TURN_DURATION})"
-            )
-            return f"M4 {MICRO_TURN_DURATION}", False
-
-        print(
-            f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-            f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 38..75px -> M1 {STEP_DURATION}"
-        )
-        return f"M1 {STEP_DURATION}", False
-
-    # ----------------------------------------------------------
-    # CORNER STATE 4: FINAL ALIGNMENT (M6 300 RIGHT / M5 250 LEFT)
-    # ----------------------------------------------------------
-    if corner_state == "CORNER_FINAL_ALIGN":
-        is_straight = (
-            valid_count >= 4
-            and angle_deg is not None
-            and abs(angle_deg) <= FINAL_ALIGN_MAX_DEG
-        )
-
-        if is_straight:
-            print(
-                f"[CORNER TURN COMPLETE] Hull squared ({angle_deg:+.1f} deg) & 5cm anchored at {mark_5_offset}px! "
-                f"(Pts={valid_count}) -> Resume Normal (M1 {STEP_DURATION})"
-            )
-            corner_state = "NORMAL"
-            corner_rotate_steps = 0
-            corner_pull_steps = 0
-            blind_approach_steps = 0
-            front_guide_steps = 0
-            return f"M1 {STEP_DURATION}", False
-
-        if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
-            print(f"[CORNER STOP] Could not finish final alignment within {MAX_CORNER_ROTATE_STEPS} steps -> STOP!")
-            corner_state = "NORMAL"
-            corner_rotate_steps = 0
-            corner_pull_steps = 0
-            return None, True
-
-        corner_rotate_steps += 1
-        if angle_deg is None or angle_deg > 0:
-            print(
-                f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Angle={angle_display} -> Continue Rotate Right (M6 300)"
-            )
-            return "M6 300", False
-        else:
-            print(
-                f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Angle={angle_display} -> Rotate Left (M5 250)"
-            )
-            return "M5 250", False
 
     # ----------------------------------------------------------
     # IMMEDIATE FRONT EDGE GUARD: ONLY TURN IF LEFT LINE ENDS NEAR CORNER (IGNORE PANEL SEAMS)
@@ -766,7 +624,7 @@ def decide_movement(telem):
         return "M2 300", False
 
     # ----------------------------------------------------------
-    # PRIORITY 1A: LEFT LINE DETECTED AHEAD -> KEEP GOING & CENTER LANE
+    # PRIORITY 1A: ACTIVE CONTINUOUS LANE-KEEPING (TARGET 45..65px & +2.0 DEG)
     # ----------------------------------------------------------
     if (has_far_left or valid_count >= 4) and valid_count >= 4:
         blind_approach_steps = 0
@@ -775,44 +633,46 @@ def decide_movement(telem):
             print(f"[PRIORITY 1 OVERRIDE] Front edge seen at {front_cm:.1f} cm, Left Line still alive ahead -> KEEP GOING!")
 
         lane_error = (near_offset - TARGET_OFFSET) if near_offset is not None else 0.0
-        cur_angle = angle_deg if angle_deg is not None else 0.0
+        cur_angle = angle_deg if angle_deg is not None else IDEAL_CRUISE_ANGLE
 
-        # Project where the robot will land after 1 forward M1 step (~10 cm ahead)
-        # Every +1 deg of angle shifts lateral offset by ~2.5 px over a 10 cm forward step
-        projected_offset = (near_offset + (cur_angle * 2.5)) if near_offset is not None else TARGET_OFFSET
-        will_land_in_band = (SAFE_LANE_MIN <= projected_offset <= SAFE_LANE_MAX) and (abs(cur_angle) <= 6.0)
+        # Relative angle compared to ideal straight-cruise perspective (+2.0 deg)
+        rel_angle = cur_angle - IDEAL_CRUISE_ANGLE
 
-        # Desired heading angle to smoothly glide back toward 60 px (clamped to ±8 deg)
-        desired_angle = max(-8.0, min(8.0, -lane_error * 0.35))
+        # Project where near_offset will land after 1 forward M1 step (~10 cm ahead)
+        projected_offset = (near_offset + (rel_angle * 2.5)) if near_offset is not None else TARGET_OFFSET
+        will_land_in_band = (SAFE_LANE_MIN <= projected_offset <= SAFE_LANE_MAX) and (abs(rel_angle) <= 4.0)
+
+        # Desired heading angle to smoothly glide back onto 55 px (45..65 px band)
+        desired_angle = IDEAL_CRUISE_ANGLE + max(-7.0, min(7.0, -lane_error * 0.35))
         angle_diff = cur_angle - desired_angle
 
         in_safe_band = (near_offset is None) or (SAFE_LANE_MIN <= near_offset <= SAFE_LANE_MAX)
         print(
-            f"[LANE CHECK] Offset={near_offset}px (InBand={in_safe_band}) | "
-            f"Angle={angle_display} (Target={desired_angle:+.1f} deg) | Projected={projected_offset:.1f}px"
+            f"[LANE CHECK] Offset={near_offset}px (In45..65={in_safe_band}) | "
+            f"Angle={angle_display} (Desired={desired_angle:+.1f} deg, Diff={angle_diff:+.1f} deg) | Projected={projected_offset:.1f}px"
         )
 
-        # 1. Already inside 50..70px and straight (<= 4.5 deg) -> Drive straight!
-        if in_safe_band and abs(cur_angle) <= 4.5:
+        # 1. Inside 45..65 px and aligned with ideal cruise angle -> Step Forward!
+        if in_safe_band and abs(rel_angle) <= 2.5:
             print(f"[PRIORITY 1] Inside Safe Lane ({SAFE_LANE_MIN}..{SAFE_LANE_MAX}px) & Straight -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
-        # 2. Slightly outside 50..70px, BUT nose is already pointed back into the lane -> Use M1 to glide in!
+        # 2. Outside 45..65 px, BUT nose is already pointed back into the band -> Step Forward to glide in!
         if will_land_in_band:
-            print(f"[PRIORITY 1 - GLIDE IN] Angled toward center ({cur_angle:+.1f} deg) -> Step Forward to self-align (M1 {STEP_DURATION})")
+            print(f"[PRIORITY 1 - GLIDE IN] Angled toward 45..65px band ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
-        # 3. Heading angle needs correction to glide smoothly onto 60 px target
-        if abs(angle_diff) > 3.5:
-            turn_ticks = HARD_TURN_DURATION if abs(angle_diff) > 9.0 else MICRO_TURN_DURATION
+        # 3. Actively steer M4 (Right) or M3 (Left) on every move to keep line in 45..65 px!
+        if abs(angle_diff) > 2.2:
+            turn_ticks = HARD_TURN_DURATION if (abs(angle_diff) > 6.5 or abs(lane_error) > 20.0) else MICRO_TURN_DURATION
             if angle_diff > 0:
-                print(f"[PRIORITY 1] Adjust Heading Right (Diff={angle_diff:+.1f} deg) -> M4 {turn_ticks}")
+                print(f"[PRIORITY 1 - SELF-CORRECT] Steer Right toward 45..65px (Diff={angle_diff:+.1f} deg) -> M4 {turn_ticks}")
                 return f"M4 {turn_ticks}", False
             else:
-                print(f"[PRIORITY 1] Adjust Heading Left (Diff={angle_diff:+.1f} deg) -> M3 {turn_ticks}")
+                print(f"[PRIORITY 1 - SELF-CORRECT] Steer Left toward 45..65px (Diff={angle_diff:+.1f} deg) -> M3 {turn_ticks}")
                 return f"M3 {turn_ticks}", False
         else:
-            print(f"[PRIORITY 1] Heading on intercept course ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
+            print(f"[PRIORITY 1] On intercept course ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
@@ -839,7 +699,7 @@ def decide_movement(telem):
                 return None, True
 
     # ----------------------------------------------------------
-    # PRIORITY 3: FRONT-LINE FALLBACK ALIGNMENT (WHEN LEFT LINE LOST BUT FRONT LINE TRACKED)
+    # PRIORITY 3: FRONT-LINE FALLBACK ALIGNMENT (LAST TRY BEFORE QUITTING)
     # ----------------------------------------------------------
     if front_cm is not None:
         if front_cm <= STOP_EDGE_CM:
@@ -889,12 +749,11 @@ def decide_movement(telem):
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
-    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps, corner_pull_steps
+    global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps
     blind_approach_steps = 0
     front_guide_steps = 0
     corner_state = "NORMAL"
     corner_rotate_steps = 0
-    corner_pull_steps = 0
 
     print("\n==========================================")
     print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
