@@ -485,7 +485,7 @@ def decide_movement(telem):
     LANE_GAIN = 1.0
     STOP_EDGE_CM = 10.0             # Trigger corner sequence when front edge <= 10.0 cm
     SAFE_ROTATE_CLEARANCE_CM = 13.5 # Minimum front edge distance required BEFORE rotating
-    COARSE_ALIGN_MAX_DEG = 12.0     # Must rotate within ±12 deg BEFORE pulling forward with M1
+    COARSE_ALIGN_MAX_DEG = 6.0      # Must rotate within ±6 deg BEFORE pulling forward with M1
     FINAL_ALIGN_MAX_DEG = 4.0       # Final squared hull tolerance (±4 deg) after pull-in
     STEP_DURATION = 300
     MICRO_TURN_DURATION = 250       # Minimum 250 ticks so IRFB3306 + relay switches cleanly
@@ -493,6 +493,13 @@ def decide_movement(telem):
     MAX_BLIND_APPROACH_STEPS = 2
     MAX_CORNER_ROTATE_STEPS = 12    # Safety cap so it never spins endlessly
     MAX_CORNER_PULL_STEPS = 5       # Max M1 steps to bring 5cm mark into 50..70 px
+
+    def calc_rotate_ticks(deg):
+        if deg is None:
+            return 280
+        # 180 ticks overcomes relay + static friction; ~16 ticks per remaining degree
+        raw_ticks = int(180 + abs(deg) * 16.0)
+        return max(230, min(350, raw_ticks))
 
     is_left_valid = telem["is_left_valid"]
     valid_count = telem["valid_count"]
@@ -552,7 +559,7 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: ROTATE RIGHT (M6 300) UNTIL ANGLE <= ±6.0 DEG
+    # CORNER STATE 2: COARSE M6 ROTATE UNTIL ANGLE <= ±6.0 DEG
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
         angle_within_coarse = (
@@ -587,11 +594,12 @@ def decide_movement(telem):
                 return None, True
 
             corner_rotate_steps += 1
+            rot_ticks = calc_rotate_ticks(angle_deg)
             print(
                 f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 300"
+                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 {rot_ticks}"
             )
-            return "M6 300", False
+            return f"M6 {rot_ticks}", False
 
     # ----------------------------------------------------------
     # CORNER STATE 3: FINISH ROTATION IF UNDER-ROTATED (> +6 DEG), ELSE PULL INTO 38..75px
@@ -677,7 +685,7 @@ def decide_movement(telem):
         return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 4: FINAL ALIGNMENT (M6 300 RIGHT / M5 250 LEFT)
+    # CORNER STATE 4: CONTINUE ROTATING UNTIL HULL ANGLE <= ±4.0 DEG
     # ----------------------------------------------------------
     if corner_state == "CORNER_FINAL_ALIGN":
         is_straight = (
@@ -705,19 +713,19 @@ def decide_movement(telem):
             return None, True
 
         corner_rotate_steps += 1
+        rot_ticks = calc_rotate_ticks(angle_deg)
         if angle_deg is None or angle_deg > 0:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Angle={angle_display} -> Continue Rotate Right (M6 300)"
+                f"5cm={mark_5_offset}px, Angle={angle_display} -> Calculated Rotate Right (M6 {rot_ticks})"
             )
-            return "M6 300", False
+            return f"M6 {rot_ticks}", False
         else:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Angle={angle_display} -> Rotate Left (M5 250)"
+                f"5cm={mark_5_offset}px, Angle={angle_display} -> Calculated Rotate Left (M5 {rot_ticks})"
             )
-            return "M5 250", False
-
+            return f"M5 {rot_ticks}", False
     # ----------------------------------------------------------
     # IMMEDIATE FRONT EDGE GUARD: ONLY TURN IF LEFT LINE ENDS NEAR CORNER (IGNORE PANEL SEAMS)
     # ----------------------------------------------------------
