@@ -552,7 +552,7 @@ def decide_movement(telem):
             return "M2 200", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 2: COARSE M6 ROTATE UNTIL ANGLE <= ±12.0 DEG
+    # CORNER STATE 2: ROTATE RIGHT (M6 300) UNTIL ANGLE <= ±6.0 DEG
     # ----------------------------------------------------------
     if corner_state == "CORNER_ROTATE":
         angle_within_coarse = (
@@ -589,76 +589,95 @@ def decide_movement(telem):
             corner_rotate_steps += 1
             print(
                 f"[CORNER ROTATING {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 120"
+                f"Angle={angle_display} (Need <= ±{COARSE_ALIGN_MAX_DEG} deg, Pts={valid_count}) -> M6 300"
             )
-            return "M6 120", False
+            return "M6 300", False
 
     # ----------------------------------------------------------
-    # CORNER STATE 3: ALIGN INTO 38..75px LANE BAND (STEER LEFT/RIGHT IF NEEDED)
+    # CORNER STATE 3: FINISH ROTATION IF UNDER-ROTATED (> +6 DEG), ELSE PULL INTO 38..75px
     # ----------------------------------------------------------
     if corner_state == "CORNER_PULL_IN":
+        # If still under-rotated (e.g. +17 deg like front_0136), finish rotating right with M6 300!
+        if angle_deg is not None and angle_deg > COARSE_ALIGN_MAX_DEG:
+            if corner_rotate_steps >= MAX_CORNER_ROTATE_STEPS:
+                print(f"[CORNER STOP] Reached max rotation steps ({MAX_CORNER_ROTATE_STEPS}) -> STOP!")
+                corner_state = "NORMAL"
+                corner_rotate_steps = 0
+                corner_pull_steps = 0
+                return None, True
+
+            corner_rotate_steps += 1
+            print(
+                f"[CORNER FINISH ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
+                f"Under-rotated ({angle_deg:+.1f} deg > +{COARSE_ALIGN_MAX_DEG} deg) -> M6 300"
+            )
+            return "M6 300", False
+
         pull_in_band_ok = (mark_5_offset is not None and 38.0 <= mark_5_offset <= 75.0)
         line_aligned = (valid_count >= 5 and angle_deg is not None and abs(angle_deg) <= 6.0)
 
         if pull_in_band_ok and line_aligned:
             print(
                 f"[5cm MARK LOCKED] 5cm mark at {mark_5_offset}px & aligned ({angle_deg:+.1f} deg) "
-                f"-> Continuing final rotation to straighten hull!"
+                f"-> Resume Normal (M1 {STEP_DURATION})"
             )
-            corner_state = "CORNER_FINAL_ALIGN"
+            corner_state = "NORMAL"
             corner_rotate_steps = 0
-        else:
-            if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
-                if valid_count >= 4:
-                    print(
-                        f"[CORNER SOFT-HANDOFF] 5cm={mark_5_offset}px after {MAX_CORNER_PULL_STEPS} pull steps, "
-                        f"line valid ({valid_count} pts) -> Handing over to NORMAL lane tracking (M1 {STEP_DURATION})"
-                    )
-                    corner_state = "NORMAL"
-                    corner_rotate_steps = 0
-                    corner_pull_steps = 0
-                    blind_approach_steps = 0
-                    return f"M1 {STEP_DURATION}", False
-                else:
-                    print(f"[CORNER STOP] Lost left line during pull-in after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
-                    corner_state = "NORMAL"
-                    corner_rotate_steps = 0
-                    corner_pull_steps = 0
-                    return None, True
+            corner_pull_steps = 0
+            blind_approach_steps = 0
+            return f"M1 {STEP_DURATION}", False
 
-            corner_pull_steps += 1
+        if corner_pull_steps >= MAX_CORNER_PULL_STEPS:
+            if valid_count >= 4:
+                print(
+                    f"[CORNER SOFT-HANDOFF] 5cm={mark_5_offset}px after {MAX_CORNER_PULL_STEPS} pull steps, "
+                    f"line valid ({valid_count} pts) -> Handing over to NORMAL lane tracking (M1 {STEP_DURATION})"
+                )
+                corner_state = "NORMAL"
+                corner_rotate_steps = 0
+                corner_pull_steps = 0
+                blind_approach_steps = 0
+                return f"M1 {STEP_DURATION}", False
+            else:
+                print(f"[CORNER STOP] Lost left line during pull-in after {MAX_CORNER_PULL_STEPS} steps -> STOP!")
+                corner_state = "NORMAL"
+                corner_rotate_steps = 0
+                corner_pull_steps = 0
+                return None, True
 
-            # Too far right (> 75px) or angled away (> +4 deg) -> Steer LEFT (M3) toward line!
-            if (mark_5_offset is not None and mark_5_offset > 75.0) or (angle_deg is not None and angle_deg > 4.0):
-                # If already angled strongly left (<= -6 deg) to come back in, step M1 forward to glide in
-                if angle_deg is not None and angle_deg <= -6.0:
-                    print(
-                        f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                        f"5cm={mark_5_offset}px, gliding left at {angle_deg:+.1f} deg -> M1 {STEP_DURATION}"
-                    )
-                    return f"M1 {STEP_DURATION}", False
+        corner_pull_steps += 1
 
+        # Angle is already <= +6 deg, so if 5cm > 75px, steer left (M3) to glide into band
+        if mark_5_offset is not None and mark_5_offset > 75.0:
+            if angle_deg is not None and angle_deg <= -5.0:
                 print(
                     f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                    f"5cm={mark_5_offset}px (> 75px) / Angle={angle_display} -> Steer Left toward line (M3 {MICRO_TURN_DURATION})"
+                    f"5cm={mark_5_offset}px, gliding left at {angle_deg:+.1f} deg -> M1 {STEP_DURATION}"
                 )
-                return f"M3 {MICRO_TURN_DURATION}", False
-
-            # Too close to left edge (< 38px) and not already angled right -> Nudge RIGHT (M4)
-            if mark_5_offset is not None and mark_5_offset < 38.0 and (angle_deg is None or angle_deg < 4.0):
-                print(
-                    f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                    f"5cm too close ({mark_5_offset}px < 38px) -> Nudge Right (M4 {MICRO_TURN_DURATION})"
-                )
-                return f"M4 {MICRO_TURN_DURATION}", False
+                return f"M1 {STEP_DURATION}", False
 
             print(
                 f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
-                f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 38..75px -> M1 {STEP_DURATION}"
+                f"5cm={mark_5_offset}px (> 75px) & Angle={angle_display} -> Steer Left toward line (M3 {MICRO_TURN_DURATION})"
             )
-            return f"M1 {STEP_DURATION}", False
+            return f"M3 {MICRO_TURN_DURATION}", False
+
+        # Too close to left edge (< 38px) -> Nudge right (M4)
+        if mark_5_offset is not None and mark_5_offset < 38.0 and (angle_deg is None or angle_deg < 4.0):
+            print(
+                f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
+                f"5cm too close ({mark_5_offset}px < 38px) -> Nudge Right (M4 {MICRO_TURN_DURATION})"
+            )
+            return f"M4 {MICRO_TURN_DURATION}", False
+
+        print(
+            f"[CORNER PULL-IN {corner_pull_steps}/{MAX_CORNER_PULL_STEPS}] "
+            f"Angle={angle_display}, stepping M1 until 5cm mark ({mark_5_offset}px) enters 38..75px -> M1 {STEP_DURATION}"
+        )
+        return f"M1 {STEP_DURATION}", False
+
     # ----------------------------------------------------------
-    # CORNER STATE 4: CONTINUE ROTATING UNTIL HULL ANGLE <= ±4.0 DEG
+    # CORNER STATE 4: FINAL ALIGNMENT (M6 300 RIGHT / M5 250 LEFT)
     # ----------------------------------------------------------
     if corner_state == "CORNER_FINAL_ALIGN":
         is_straight = (
@@ -689,9 +708,9 @@ def decide_movement(telem):
         if angle_deg is None or angle_deg > 0:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
-                f"5cm={mark_5_offset}px, Angle={angle_display} -> Continue Rotate Right (M6 120)"
+                f"5cm={mark_5_offset}px, Angle={angle_display} -> Continue Rotate Right (M6 300)"
             )
-            return "M6 120", False
+            return "M6 300", False
         else:
             print(
                 f"[CORNER FINAL ROTATE {corner_rotate_steps}/{MAX_CORNER_ROTATE_STEPS}] "
