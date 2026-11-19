@@ -656,49 +656,39 @@ def decide_movement(telem):
         else:
             print(f"[PRIORITY 1] Heading on intercept course ({cur_angle:+.1f} deg) -> Step Forward (M1 {STEP_DURATION})")
             return f"M1 {STEP_DURATION}", False
+
     # ----------------------------------------------------------
-    # PRIORITY 2: LEFT LINE ENDED AHEAD -> CHECK FRONT EDGE
+    # PRIORITY 2: FRONT EDGE APPROACH (EVEN IF LEFT LINE < 4 PTS AT CORNER)
     # ----------------------------------------------------------
-    if is_left_valid and not has_far_left:
-        if front_cm is not None:
-            blind_approach_steps = 0
-            if front_cm <= STOP_EDGE_CM:
-                print(
-                    f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
-                    f"-> Backing up for safe clearance (M2 300)"
-                )
-                corner_state = "CORNER_BACKUP"
-                return "M2 300", False
-            else:
-                print(
-                    f"[PRIORITY 2 - APPROACH] Left line ended (Y={left_end_y} px) & Front edge at {front_cm:.1f} cm "
-                    f"(> {STOP_EDGE_CM} cm) -> Lock steering & Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
+    if front_cm is not None:
+        blind_approach_steps = 0
+        if front_cm <= STOP_EDGE_CM:
+            print(
+                f"[PRIORITY 2 - CORNER DETECTED] Front edge at {front_cm:.1f} cm (<= {STOP_EDGE_CM} cm) "
+                f"-> Backing up for safe clearance (M2 300)"
+            )
+            corner_state = "CORNER_BACKUP"
+            return "M2 300", False
         else:
-            if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
-                blind_approach_steps += 1
-                print(
-                    f"[PRIORITY 2 - CORNER APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
-                    f"Left line ended at {left_end_cm} cm, scanning for front line -> Step Forward (M1 {STEP_DURATION})"
-                )
-                return f"M1 {STEP_DURATION}", False
-            else:
-                print("[STOP - NO LINE] Left line ended and no front edge found after approach -> STOP MOVING!")
-                return None, True
+            print(
+                f"[PRIORITY 2 - CORNER APPROACH] Front edge seen at {front_cm:.1f} cm (> {STOP_EDGE_CM} cm), "
+                f"Left pts={valid_count} -> Stepping forward to reach corner (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
 
     # ----------------------------------------------------------
-    # SAFETY FALLBACK: FRONT EDGE REACHED EVEN IF LEFT PTS < 2
+    # BLIND APPROACH (WHEN LEFT LINE ENDED & FRONT EDGE NOT IN VIEW YET)
     # ----------------------------------------------------------
-    if front_cm is not None and front_cm <= STOP_EDGE_CM:
-        print(
-            f"[PRIORITY 2 - CORNER DETECTED] Front edge close ({front_cm:.1f} cm <= {STOP_EDGE_CM} cm) "
-            f"-> Backing up for safe clearance (M2 300)"
-        )
-        corner_state = "CORNER_BACKUP"
-        return "M2 300", False
+    if valid_count >= 1 and not has_far_left:
+        if blind_approach_steps < MAX_BLIND_APPROACH_STEPS:
+            blind_approach_steps += 1
+            print(
+                f"[PRIORITY 2 - BLIND APPROACH {blind_approach_steps}/{MAX_BLIND_APPROACH_STEPS}] "
+                f"Left line ended at {left_end_cm} cm, scanning for front edge -> Step Forward (M1 {STEP_DURATION})"
+            )
+            return f"M1 {STEP_DURATION}", False
 
-    print("[STOP - NO LINE] Left line lost (insufficient points) -> STOP MOVING!")
+    print("[STOP - NO LINE] Both left line and front edge lost -> STOP MOVING!")
     return None, True
 
 
