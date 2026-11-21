@@ -87,9 +87,14 @@ void cmdHandler(){
       if (spaceIndex != -1) {
           int durationMs = response.substring(spaceIndex + 1).toInt();
           
-          digitalWrite(PUMP_PIN, HIGH); // Turn pump ON
-          delay(durationMs);            // Run for requested ms
-          digitalWrite(PUMP_PIN, LOW);  // Turn pump OFF
+          // 1. Fire pump at your preset PWM speed
+          analogWrite(PUMP_PIN, DEFAULT_PUMP_PWM_SPEED);
+          
+          // 2. Run for the requested time (e.g. 100ms or 2000ms)
+          delay(durationMs);
+          
+          // 3. Shut pump OFF immediately
+          analogWrite(PUMP_PIN, 0);
           
           // 4. Send clean ACK back to Q6A (No countdown spam)
           Serial.println("OK : PUMP_DONE");

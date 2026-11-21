@@ -29,8 +29,8 @@
     8  -> PIO ->  
     9  -> PWM -> RIGHT_LPWM_EN
     10 -> PWM -> BRUSH_PIN
-    11 -> PWM -> 
-    12 -> PIO -> PUMP_PIN
+    11 -> PWM -> PUMP_PIN
+    12 -> PIO -> 
     13 -> PIO -> 
 */
 
@@ -48,7 +48,7 @@
 
 
 #define BRUSH_PIN 10 // Set to whichever PWM pin connects to your TIP120 1k resistor
-#define PUMP_PIN 12   // Water Pump TIP120 Base (PWM Pin 11)
+#define PUMP_PIN 11   // Water Pump TIP120 Base (PWM Pin 11)
 
 void initPins(){
     pinMode(LEFT_LPWM_PIN, OUTPUT);
@@ -58,7 +58,7 @@ void initPins(){
     pinMode(BRUSH_PIN, OUTPUT);
     pinMode(PUMP_PIN, OUTPUT);
     analogWrite(BRUSH_PIN, 0);
-    digitalWrite(PUMP_PIN, LOW);
+    analogWrite(PUMP_PIN, 0);
 }
 
 #endif
