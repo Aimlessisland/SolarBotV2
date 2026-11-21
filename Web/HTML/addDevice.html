@@ -1,40 +1,69 @@
+<!--http://localhost:3000/addDevice.html-->
+
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+    <!-- กำหนดรูปแบบตัวอักษรและการแสดงผลบนหน้าจอ -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- ชื่อหน้าเว็บ -->
     <title>Device</title>
-    <link rel="stylesheet" href="CSS/addDevice.css">  
-    <script src="/JS/menu.js"></script> 
-    <script src="/JS/script.js"></script> 
+
+    <!-- โหลดฟอนต์ Sarabun -->
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="CSS/addDevice.css">
 </head>
+
 <body>
+    <!-- =========================================
+         SECTION 2: HEADER แสดงโลโก้และชื่อหน้า Device
+         ========================================= -->
+
     <div class="header-container">
+        <!-- โลโก้หลัก -->
         <img src="/ico/mainOrange.png" alt="Orange Icon" class="header-icon">
+
+        <!-- เส้นสีส้ม -->
         <div class="orange-bar"></div>
+
+        <!-- ชื่อหน้า -->
         <span class="title">Device</span>
     </div>
 
+
+    <!-- =========================================
+         SECTION 3: DEVICE LIST แสดงรายการอุปกรณ์ที่มีอยู่
+         ========================================= -->
+
     <div class="device-list">
-        <!-- Existing Device Card -->
-        <a href="deviceDetail.html" class="device-card orange-card" style="text-decoration: none; color: inherit;">
+
+        <!-- การ์ดอุปกรณ์สำหรับเข้าหน้า Device Detail -->
+        <a href="deviceDetail.html" class="device-card orange-card"
+           style="text-decoration: none; color: inherit;">
+
+            <!-- รูปภาพอุปกรณ์ -->
             <img src="/ico/solarBot.png" alt="Device" class="device-img">
+
+            <!-- ข้อมูลอุปกรณ์ -->
             <div class="device-info">
                 <span class="device-number">1st Device</span>
                 <span class="device-name">Solar MD 001</span>
             </div>
         </a>
 
-        <!-- Add Device Card -->
+        <!-- =========================================
+             SECTION 4: ADD DEVICE แสดงการ์ดสำหรับเพิ่มอุปกรณ์ใหม่
+             ========================================= -->
+
         <div class="device-card add-card">
             <div class="add-icon">+</div>
             <span class="add-text">Add Device</span>
         </div>
+
     </div>
 
-    <button id="menuButton" class="menu-fab">
-        +
-    </button>
 </body>
 </html>

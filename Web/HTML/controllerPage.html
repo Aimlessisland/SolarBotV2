@@ -1,113 +1,184 @@
+<!--http://localhost:3000/controllerPage.html-->
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+    <!-- =========================================
+         SECTION 1: PAGE CONFIGURATION ตั้งค่าพื้นฐานของหน้าเว็บ
+         ========================================= -->
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>Controller</title>
-    <link rel="stylesheet" href="CSS/controllerPage.css">  
-    <script src="/JS/menu.js"></script> 
-    <script src="/JS/script.js"></script> 
+
+    <!-- โหลดฟอนต์ Sarabun -->
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&display=swap" rel="stylesheet">
+
+    <!-- เชื่อมต่อไฟล์ CSS -->
+    <link rel="stylesheet" href="CSS/controllerPage.css">
+
+    <!-- เชื่อมต่อ JavaScript สำหรับเมนูและการควบคุมหุ่นยนต์ -->
+    <script src="/JS/menu.js"></script>
+    <script src="/JS/script.js"></script>
 </head>
+
 <body>
+    <!-- =========================================
+         SECTION 2: HEADER แสดงโลโก้และชื่อหุ่นยนต์
+         ========================================= -->
+
     <div class="header-container">
         <img src="/ico/mainOrange.png" alt="Orange Icon" class="header-icon">
         <div class="orange-bar"></div>
         <span class="title">Solar MD 001</span>
     </div>
 
+
+    <!-- =========================================
+         SECTION 3: DEVICE STATUS แสดงวันที่และสถานะการเชื่อมต่อ
+         ========================================= -->
+
     <div class="info-row">
         <span class="date-label">Date: 22/09/2026</span>
         <span id="connectionStatus" class="status-connecting">Connecting</span>
     </div>
 
-    <!-- Video Display Card -->
-    <div class="video-card" style="position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000;">
-        <!-- Live Video Stream -->
-        <img 
-            id="streamFeed" 
-            alt="Live Stream" 
-            style="width: 100%; height: 100%; object-fit: cover; display: none;"
-        />
 
-        <!-- Connecting / Spinner Fallback -->
-        <div id="loadingState" style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+    <!-- =========================================
+         SECTION 4: CAMERA DISPLAY แสดงภาพและสถานะการโหลดกล้อง
+         ========================================= -->
+
+    <div class="video-card"
+         style="position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000;">
+
+        <!-- แสดงภาพล่าสุดจากกล้อง -->
+        <img
+            id="streamFeed"
+            alt="Live Stream"
+            style="width: 100%; height: 100%; object-fit: cover; display: none;"
+        >
+
+        <!-- แสดง Loading ระหว่างเชื่อมต่อหรือโหลดภาพไม่สำเร็จ -->
+        <div id="loadingState"
+             style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
             <div class="spinner"></div>
             <span class="video-text">Connecting</span>
         </div>
     </div>
-    
+
+
+    <!-- =========================================
+         SECTION 5: CAMERA INFORMATION แสดงชื่อกล้องและเมนูสลับกล้อง
+         ========================================= -->
+
     <div class="cam-header">
         <div class="cam-title-area">
-            <span class="cam-icon">📷</span>
+            <img src="/ico/camera.png" alt="Camera" class="cam-icon">
             <span class="cam-name">Front Cam</span>
         </div>
+
         <span class="switch-cam">Switch Cam</span>
     </div>
-    
+
     <div class="orange-progress-bar"></div>
-    
+
+
+    <!-- =========================================
+         SECTION 6: ROBOT CONTROLS ปุ่มควบคุมการทำงานของหุ่นยนต์
+         ========================================= -->
+
     <div class="control-section">
         <div class="section-title">Control</div>
-        
+
+        <!-- ปุ่มควบคุมทิศทางทั้ง 4 -->
         <div class="dpad-row">
-            <button class="control-btn">←</button>
-            <button class="control-btn">↑</button>
-            <button class="control-btn">↓</button>
-            <button class="control-btn">→</button>
+
+            <!-- Left -->
+            <button class="control-btn">
+                <img src="/ico/left-arrow.png" class="arrow-icon" alt="Left">
+            </button>
+
+            <!-- Up -->
+            <button class="control-btn">
+                <img src="/ico/up-arrow.png" class="arrow-icon" alt="Up">
+            </button>
+
+            <!-- Down -->
+            <button class="control-btn">
+                <img src="/ico/down-arrow.png" class="arrow-icon" alt="Down">
+            </button>
+
+            <!-- Right -->
+            <button class="control-btn">
+                <img src="/ico/right-arrow.png" class="arrow-icon" alt="Right">
+            </button>
         </div>
 
+        <!-- ปุ่ม Power Off และ Start | Break -->
         <div class="action-row">
-            <button class="control-btn power-btn">⏻</button>
+            <button class="control-btn power-btn">
+                <img src="/ico/power-button.png" alt="Power" class="power-icon">
+            </button>
+
             <button class="control-btn wide-btn">Start | Break</button>
         </div>
     </div>
 
+
+    <!-- =========================================
+         SECTION 7: MENU & CAMERA SCRIPT เมนูนำทางและการโหลดภาพกล้อง
+         ========================================= -->
+
+    <!-- ปุ่มเปิดเมนูนำทาง -->
     <button id="menuButton" class="menu-fab">
         Menu
     </button>
 
+    <!-- ดึงภาพล่าสุดจาก NodeJS และโหลดซ้ำทุก 3 วินาที -->
     <script>
-        const STREAM_URL = "http://192.168.1.112:5000/video_feed";
+        const STREAM_URL = "/api/latest-camera";
+
         const streamImg = document.getElementById('streamFeed');
         const loadingState = document.getElementById('loadingState');
         const statusLabel = document.getElementById('connectionStatus');
 
-        let retryInterval = null;
-
+        // ขอภาพล่าสุดพร้อม Timestamp เพื่อป้องกัน Browser Cache
         function connectStream() {
-            // Force show the video element immediately and hide loading spinner
+            streamImg.src = `${STREAM_URL}?t=${Date.now()}`;
+        }
+
+        // เมื่อโหลดภาพสำเร็จ
+        streamImg.onload = () => {
             streamImg.style.display = 'block';
             loadingState.style.display = 'none';
+
             if (statusLabel) {
                 statusLabel.textContent = 'Connected';
                 statusLabel.className = 'status-connected';
             }
 
-            // Load the exact working IP URL directly
-            streamImg.src = STREAM_URL;
-        }
+            // โหลดภาพครั้งถัดไปหลัง 3 วินาที
+            setTimeout(connectStream, 3000);
+        };
 
+        // เมื่อโหลดภาพไม่สำเร็จ
         streamImg.onerror = () => {
-            // If connection drops, hide image and show loading state
             streamImg.style.display = 'none';
             loadingState.style.display = 'flex';
+
             if (statusLabel) {
                 statusLabel.textContent = 'Connecting';
                 statusLabel.className = 'status-connecting';
             }
 
-            // Retry connection after 2 seconds
-            if (!retryInterval) {
-                retryInterval = setTimeout(() => {
-                    retryInterval = null;
-                    connectStream();
-                }, 2000);
-            }
+            // ลองโหลดภาพใหม่หลัง 3 วินาที
+            setTimeout(connectStream, 3000);
         };
 
-        // Start stream connection on initial page load
+        // เริ่มโหลดภาพเมื่อเปิดหน้า Controller
         connectStream();
     </script>
+
 </body>
 </html>

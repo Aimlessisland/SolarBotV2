@@ -1,7 +1,14 @@
+
+/* =========================================
+   SECTION 1: GLOBAL STYLES ตั้งค่าพื้นฐานของหน้าเว็บ
+   ========================================= */
+
+/* คำนวณขนาด Element โดยรวม Padding และ Border */
 *, *::before, *::after {
     box-sizing: border-box;
 }
 
+/* กำหนดขนาด สีพื้นหลัง และการแสดงผลของหน้าเว็บ */
 html, body {
     margin: 0;
     padding: 18px;
@@ -12,33 +19,17 @@ html, body {
     overflow: hidden;
 }
 
-.menu-fab {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 9999;
-    width: 5rem;     /* Increased size */
-    height: 5rem;    /* Increased size */
-    background-color: #ea580c; /* orange-600 */
-    color: #ffffff;
-    font-weight: bold;
-    font-size: 1rem; /* Larger text */
-    border: none;
-    border-radius: 9999px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.6);
-    cursor: pointer;
-    transition: background-color 0.3s ease, transform 0.2s ease;
-    flex-shrink: 0;
+/* กำหนดฟอนต์หลักของหน้าเว็บ */
+body {
+    font-family: 'Sarabun', sans-serif;
 }
 
-.menu-fab:hover {
-    background-color: #f97316; /* orange-500 */
-    transform: scale(1.05);    /* Slight pop effect on hover */
-}
 
+/* =========================================
+   SECTION 2: HEADER แสดงโลโก้และชื่อหุ่นยนต์
+   ========================================= */
+
+/* จัดเรียงโลโก้ เส้นสีส้ม และชื่อหุ่นยนต์ */
 .header-container {
     display: flex;
     align-items: center;
@@ -46,12 +37,14 @@ html, body {
     padding: 16px;
 }
 
+/* กำหนดขนาดโลโก้ */
 .header-icon {
     width: 32px;
     height: 32px;
     object-fit: contain;
 }
 
+/* เส้นสีส้มแนวตั้ง */
 .orange-bar {
     width: 4px;
     height: 28px;
@@ -59,6 +52,7 @@ html, body {
     border-radius: 2px;
 }
 
+/* ข้อความชื่อหุ่นยนต์ */
 .title {
     font-family: 'Sarabun', sans-serif;
     font-size: 1.25rem;
@@ -66,10 +60,12 @@ html, body {
     color: #ffffff;
 }
 
-body {
-    font-family: 'Sarabun', sans-serif;
-}
 
+/* =========================================
+   SECTION 3: DEVICE STATUS แสดงวันที่และสถานะการเชื่อมต่อ
+   ========================================= */
+
+/* จัดตำแหน่งวันที่และสถานะการเชื่อมต่อ */
 .info-row {
     display: flex;
     justify-content: space-between;
@@ -79,14 +75,22 @@ body {
     font-size: 0.95rem;
 }
 
+/* ข้อความวันที่ */
 .date-label {
     font-weight: bold;
 }
 
+/* สีข้อความขณะกำลังเชื่อมต่อ */
 .status-connecting {
     color: #aaa7a7;
 }
 
+
+/* =========================================
+   SECTION 4: CAMERA DISPLAY แสดงภาพกล้องและข้อมูลกล้อง
+   ========================================= */
+
+/* กำหนดขนาดและพื้นที่แสดงภาพกล้อง */
 .video-card {
     width: 100%;
     height: 180px;
@@ -100,6 +104,7 @@ body {
     margin-bottom: 16px;
 }
 
+/* สร้างวงกลม Loading ขณะโหลดภาพ */
 .spinner {
     width: 28px;
     height: 28px;
@@ -109,17 +114,20 @@ body {
     animation: spin 1s linear infinite;
 }
 
+/* กำหนดการหมุนของ Loading */
 @keyframes spin {
     0% { transform: rotate(0deg); }
     100% { transform: rotate(360deg); }
 }
 
+/* ข้อความ Loading */
 .video-text {
     color: #ffffff;
     font-size: 1.1rem;
     font-weight: bold;
 }
 
+/* จัดตำแหน่งชื่อกล้องและ Switch Cam */
 .cam-header {
     display: flex;
     justify-content: space-between;
@@ -127,6 +135,7 @@ body {
     margin-bottom: 8px;
 }
 
+/* จัดเรียงไอคอนและชื่อกล้อง */
 .cam-title-area {
     display: flex;
     align-items: center;
@@ -134,12 +143,22 @@ body {
     font-weight: bold;
 }
 
+/* กำหนดขนาดไอคอนกล้อง */
+.cam-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    display: block;
+}
+
+/* ข้อความ Switch Cam */
 .switch-cam {
     color: #aaa7a7;
     font-size: 0.9rem;
     cursor: pointer;
 }
 
+/* เส้นสีส้มใต้ข้อมูลกล้อง */
 .orange-progress-bar {
     width: 100%;
     height: 4px;
@@ -148,29 +167,39 @@ body {
     margin-bottom: 20px;
 }
 
+
+/* =========================================
+   SECTION 5: ROBOT CONTROLS จัดการปุ่มควบคุมหุ่นยนต์
+   ========================================= */
+
+/* จัดเรียงส่วนควบคุมหุ่นยนต์ในแนวตั้ง */
 .control-section {
     display: flex;
     flex-direction: column;
     gap: 12px;
 }
 
+/* ข้อความหัวข้อ Control */
 .section-title {
     font-weight: bold;
     font-size: 1.1rem;
 }
 
+/* จัดเรียงปุ่มลูกศรทั้ง 4 ทิศทาง */
 .dpad-row {
     display: flex;
     justify-content: space-between;
     gap: 10px;
 }
 
+/* จัดเรียงปุ่ม Power Off และ Start | Break */
 .action-row {
     display: flex;
     gap: 10px;
     padding-top: 10px;
 }
 
+/* กำหนดรูปแบบพื้นฐานของปุ่มควบคุม */
 .control-btn {
     background-color: #555555;
     color: #ffffff;
@@ -185,23 +214,106 @@ body {
     user-select: none;
     touch-action: none;
 }
-.dpad-row .control-btn,
-.power-btn {
-    width: 90px;
-    height: 90px;
+
+/* กำหนดขนาดและรูปทรงปุ่มลูกศร */
+.dpad-row .control-btn {
+    width: 80px;
+    height: 80px;
     border-radius: 50%;
     flex: 0 0 auto;
 }
 
-.power-btn {
-    font-size: 1.5rem;
+/* กำหนดขนาดไอคอนลูกศร */
+.arrow-icon {
+    width: 68%;
+    height: 68%;
+    object-fit: contain;
+    mix-blend-mode: multiply;
+    pointer-events: none;
 }
 
-/* Make Start | Break a wide rounded button */
+/* กำหนดขนาดและรูปทรงปุ่ม Start | Break */
 .wide-btn {
     flex: 1;
     height: 64px;
     border-radius: 16px;
     font-size: 2.1rem;
-    
+}
+
+/* กำหนดพื้นที่ปุ่ม Power Off ให้โปร่งใส */
+.control-btn.power-btn {
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
+    width: 70px;
+    height: 70px;
+}
+
+/* กำหนดขนาดและสีเริ่มต้นของไอคอน Power Off */
+.power-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    filter: grayscale(100%);
+}
+
+
+/* =========================================
+   SECTION 6: BUTTON STATES จัดการสีตามสถานะของปุ่ม
+   ========================================= */
+
+/* เปลี่ยนปุ่มลูกศรเป็นสีส้มขณะกดค้าง */
+.dpad-row .control-btn.is-pressed {
+    background-color: #ea580c;
+}
+
+/* เปลี่ยนปุ่ม Start เป็นสีเขียว */
+.wide-btn.is-running {
+    background-color: #16a34a;
+}
+
+/* เปลี่ยนปุ่ม Break เป็นสีส้ม */
+.wide-btn.is-break {
+    background-color: #ea580c;
+}
+
+/* คืนสีต้นฉบับของไอคอน Power Off เมื่อกด */
+.power-btn.is-off .power-icon {
+    filter: none;
+}
+
+
+/* =========================================
+   SECTION 7: NAVIGATION MENU จัดการปุ่มเมนูนำทาง
+   ========================================= */
+
+/* กำหนดตำแหน่ง ขนาด และรูปแบบของปุ่ม Menu */
+.menu-fab {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    width: 5rem;
+    height: 5rem;
+    background-color: #ea580c;
+    color: #ffffff;
+    font-weight: bold;
+    font-size: 1rem;
+    border: none;
+    border-radius: 9999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+/* เปลี่ยนสีและขยายปุ่ม Menu เมื่อ Hover */
+.menu-fab:hover {
+    background-color: #f97316;
+    transform: scale(1.05);
 }
