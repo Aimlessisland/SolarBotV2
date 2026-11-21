@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import math
 import time
 import threading
@@ -19,6 +20,32 @@ FORWARD_DIR = "imgForward"
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 115200
 BRUSH_WIDTH_CM = 71.0
+
+M1_DIST_TABLE = {
+    100: 5.0,
+    200: 1.0,
+    300: 9.0,
+    400: 15.0,
+    500: 20.0,
+    600: 30.0,
+    700: 36.0,
+    800: 43.0,
+    900: 50.0,
+    1000: 57.0,
+}
+
+M2_DIST_TABLE = {
+    100: 8.0,
+    200: 1.0,
+    300: 10.0,
+    400: 17.0,
+    500: 25.0,
+    600: 33.0,
+    700: 41.0,
+    800: 49.0,
+    900: 57.0,
+    1000: 65.0,
+}
 
 serial_lock = threading.Lock()
 blind_approach_steps = 0
@@ -746,6 +773,133 @@ def decide_movement(telem):
 
 
 # ==========================================================
+# DISTANCE MEASUREMENT & NON-BLOCKING BACKGROUND MAPPER
+# ==========================================================
+def ticks_to_cm(motor_cmd: str, ticks: int) -> float:
+    """Returns calibrated true displacement (cm) for M1 (forward) or M2 (reverse)."""
+    table = M1_DIST_TABLE if motor_cmd == "M1" else M2_DIST_TABLE
+    if ticks in table:
+        return table[ticks]
+    if ticks < 200:
+        # Unramped region (< 200 ticks)
+        return round((ticks / 100.0) * table[100], 2)
+    # Ramped cruise region (>= 200 ticks): piecewise linear interpolation
+    ramped_ticks = [200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    ramped_cm = [table[t] for t in ramped_ticks]
+    return round(float(np.interp(ticks, ramped_ticks, ramped_cm)), 2)
+
+def write_map_files_worker(path_points, corner_vertices):
+    """Background daemon writer saving a human-readable ASCII + JSON text map."""
+    try:
+        xs = [p[0] for p in path_points]
+        ys = [p[1] for p in path_points]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        width_cm = round(max_x - min_x, 1)
+        height_cm = round(max_y - min_y, 1)
+        est_passes = max(1, math.ceil(width_cm / BRUSH_WIDTH_CM))
+
+        total_dist_cm = 0.0
+        for i in range(1, len(path_points)):
+            dx = path_points[i][0] - path_points[i - 1][0]
+            dy = path_points[i][1] - path_points[i - 1][1]
+            total_dist_cm += math.hypot(dx, dy)
+        total_dist_cm = round(total_dist_cm, 1)
+
+        # Build ASCII Grid (44 chars wide x 18 rows tall)
+        grid_w, grid_h = 44, 18
+        grid = [[" " for _ in range(grid_w)] for _ in range(grid_h)]
+        span_x = max(10.0, max_x - min_x)
+        span_y = max(10.0, max_y - min_y)
+
+        def to_grid(pt):
+            gx = int(round(((pt[0] - min_x) / span_x) * (grid_w - 1)))
+            gy = int(round((1.0 - (pt[1] - min_y) / span_y) * (grid_h - 1)))
+            gx = max(0, min(grid_w - 1, gx))
+            gy = max(0, min(grid_h - 1, gy))
+            return gx, gy
+
+        # Plot path segments onto ASCII grid
+        for i in range(1, len(path_points)):
+            x0, y0 = to_grid(path_points[i - 1])
+            x1, y1 = to_grid(path_points[i])
+            steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+            for s in range(steps + 1):
+                px = int(round(x0 + (x1 - x0) * (s / steps)))
+                py = int(round(y0 + (y1 - y0) * (s / steps)))
+                if grid[py][px] == " ":
+                    grid[py][px] = "-" if abs(x1 - x0) >= abs(y1 - y0) else "|"
+
+        # Plot corners and start marker
+        turn_labels = ["EAST", "SOUTH", "WEST", "NORTH"]
+        for idx, c_pt in enumerate(corner_vertices, start=1):
+            cx, cy = to_grid(c_pt)
+            grid[cy][cx] = str(idx) if idx <= 9 else "+"
+
+        sx, sy = to_grid((0.0, 0.0))
+        grid[sy][sx] = "S"
+
+        # Assemble clean plaintext report
+        lines = []
+        lines.append("=" * 64)
+        lines.append("                 SOLAR ARRAY EXPLORATION MAP")
+        lines.append("=" * 64)
+        lines.append(f"Timestamp      : {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Array Size     : Width = {width_cm:.1f} cm  |  Height = {height_cm:.1f} cm")
+        lines.append(f"Brush Width    : {BRUSH_WIDTH_CM:.1f} cm (Est. Cleaning Passes: {est_passes})")
+        lines.append(f"Total Traveled : {total_dist_cm:.1f} cm")
+        lines.append("=" * 64)
+        lines.append("")
+        lines.append(f"                    TOP ({width_cm:.1f} cm)")
+        for row_idx, row in enumerate(grid):
+            left_lbl = f"LEFT ({height_cm:.0f}cm) " if row_idx == grid_h // 2 else "             "
+            right_lbl = f" RIGHT ({height_cm:.0f}cm)" if row_idx == grid_h // 2 else ""
+            lines.append(f"{left_lbl}{''.join(row)}{right_lbl}")
+        lines.append(f"                  BOTTOM ({width_cm:.1f} cm)")
+        lines.append("  Legend: [S]=Start (0,0)  [1..4]=Corners  [|/-]=Robot Path")
+        lines.append("")
+        lines.append("-" * 64)
+        lines.append("CORNER WAYPOINTS (CM):")
+        lines.append("  Start    : (0.0, 0.0)")
+        for idx, c_pt in enumerate(corner_vertices, start=1):
+            dir_lbl = turn_labels[(idx - 1) % 4]
+            status = "Loop Closed" if idx >= 4 else f"Turned {dir_lbl}"
+            lines.append(f"  Corner {idx} : ({c_pt[0]:.1f}, {c_pt[1]:.1f})  [{status}]")
+        lines.append("-" * 64)
+        lines.append("SUMMARY JSON:")
+
+        summary_json = {
+            "width_cm": width_cm,
+            "height_cm": height_cm,
+            "brush_width_cm": BRUSH_WIDTH_CM,
+            "est_passes": est_passes,
+            "corners_cm": corner_vertices,
+        }
+        lines.append(json.dumps(summary_json, indent=2))
+
+        txt_path = os.path.join(OUTPUT_DIR, "explored_map.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+        print("\n" + "*" * 60)
+        print(f"[EXPLORATION COMPLETE] Array Size: {width_cm:.1f} cm (W) x {height_cm:.1f} cm (H)")
+        print(f"[MAP SAVED] {txt_path}")
+        print("[SHOWCASE MODE] Background counting stopped — robot continues driving!")
+        print("*" * 60 + "\n")
+    except Exception as e:
+        print(f"[MAPPER WARNING] Could not save text map (main drive unaffected): {e}")
+
+
+def save_explored_map_async(path_points, corner_vertices):
+    """Launches a fire-and-forget daemon thread to write the map without blocking auto drive."""
+    threading.Thread(
+        target=write_map_files_worker,
+        args=(list(path_points), list(corner_vertices)),
+        daemon=True,
+    ).start()
+
+# ==========================================================
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
 def auto_drive_step_by_step(ser):
@@ -755,8 +909,22 @@ def auto_drive_step_by_step(ser):
     corner_state = "NORMAL"
     corner_rotate_steps = 0
 
+    CARDINAL_VECTORS = [
+        ("NORTH", 0.0, 1.0),
+        ("EAST",  1.0, 0.0),
+        ("SOUTH", 0.0, -1.0),
+        ("WEST", -1.0, 0.0),
+    ]
+    mapping_active = True
+    dir_idx = 0
+    x_cm, y_cm = 0.0, 0.0
+    path_points = [(0.0, 0.0)]
+    corner_vertices = []
+    total_forward_moves = 0
+
     print("\n==========================================")
     print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
+    print("Background perimeter mapper ON (Starts at 0,0 facing NORTH)")
     print("Running until edge/stop condition (Press Ctrl+C to abort)")
     print("==========================================")
 
@@ -775,10 +943,57 @@ def auto_drive_step_by_step(ser):
                 break
 
             outputImage(traced_img, img_path)
+            prev_corner_state = corner_state
             cmd, should_stop = decide_movement(telem)
+
+            # Fire-and-forget corner tracker (wrapped so it can never interrupt driving)
+            if mapping_active:
+                try:
+                    if prev_corner_state == "CORNER_ROTATE" and corner_state == "NORMAL":
+                        corner_vertices.append((round(x_cm, 1), round(y_cm, 1)))
+                        dir_idx = (dir_idx + 1) % 4
+                        print(
+                            f"[MAPPER CORNER {len(corner_vertices)}] Vertex=({x_cm:.1f}, {y_cm:.1f}) cm "
+                            f"-> Turned to {CARDINAL_VECTORS[dir_idx][0]}"
+                        )
+                except Exception as e:
+                    print(f"[MAPPER WARNING] Corner tracking skipped: {e}")
 
             if cmd is not None:
                 send_command(ser, cmd)
+
+                # Fire-and-forget distance counter (wrapped so it can never interrupt driving)
+                if mapping_active:
+                    try:
+                        parts = cmd.split()
+                        if len(parts) == 2 and parts[0] in ("M1", "M2"):
+                            motor_code = parts[0]
+                            ticks = int(parts[1])
+                            dist_cm = ticks_to_cm(motor_code, ticks)
+                            sign = 1.0 if motor_code == "M1" else -1.0
+                            heading_name, dx, dy = CARDINAL_VECTORS[dir_idx]
+
+                            x_cm += sign * dist_cm * dx
+                            y_cm += sign * dist_cm * dy
+                            path_points.append((round(x_cm, 1), round(y_cm, 1)))
+                            if motor_code == "M1":
+                                total_forward_moves += 1
+
+                            dist_to_origin = math.hypot(x_cm, y_cm)
+                            print(
+                                f"[MAPPER] {motor_code} {ticks} ({sign * dist_cm:+.1f}cm {heading_name}) "
+                                f"-> Pos=({x_cm:.1f}, {y_cm:.1f}) cm | DistToStart={dist_to_origin:.1f} cm"
+                            )
+
+                            # Once 4 corners done and back near (0,0), save in background & turn mapper off
+                            if len(corner_vertices) >= 3 and dir_idx == 3 and total_forward_moves >= 8:
+                                if dist_to_origin <= 30.0 or x_cm <= 15.0:
+                                    corner_vertices.append((round(x_cm, 1), round(y_cm, 1)))
+                                    save_explored_map_async(path_points, corner_vertices)
+                                    mapping_active = False
+                    except Exception as e:
+                        print(f"[MAPPER WARNING] Step count skipped: {e}")
+
                 time.sleep(0.2)  # Settle pause so robot finishes sliding before next photo
 
             if should_stop:
@@ -787,6 +1002,10 @@ def auto_drive_step_by_step(ser):
 
     except KeyboardInterrupt:
         print("\n[AUTO ABORTED] Stopped manually via Ctrl+C.")
+    finally:
+        if mapping_active and len(path_points) >= 5:
+            print("[MAPPER] Saving partial perimeter map in background before exit...")
+            write_map_files_worker(path_points, corner_vertices)
 
     print("==========================================\n")
 
