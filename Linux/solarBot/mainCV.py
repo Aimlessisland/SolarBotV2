@@ -53,6 +53,9 @@ front_guide_steps = 0
 corner_state = "NORMAL"      # "NORMAL" -> "CORNER_BACKUP" -> "CORNER_ROTATE" -> "NORMAL"
 corner_rotate_steps = 0
 
+# Web start/stop event for 'f' (Full Cleaning) mode
+web_start_event = threading.Event()
+
 
 def connect_port():
     try:
@@ -911,7 +914,7 @@ def start_brush_with_kick(ser, kick_pwm=120, cruise_pwm=50, kick_sec=0.15):
 # ==========================================================
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
-def auto_drive_step_by_step(ser, full_cleaning=False):
+def auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False):
     global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps
     blind_approach_steps = 0
     front_guide_steps = 0
@@ -944,19 +947,38 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
     print("\n==========================================")
     print(f">>> {mode_banner} <<<")
     print("Background perimeter mapper ON (Starts at 0,0 facing NORTH)")
-    print("Running until edge/stop condition (Press Ctrl+C to abort)")
+    print("Press Ctrl+C anytime to exit to terminal command menu")
     print("==========================================")
-
-    # Start brush immediately in 'f' mode with 120 -> 50 PWM kickstart
-    if full_cleaning:
-        start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
-        brush_running = True
-        print(f"[FULL MODE] Brush ON (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
 
     step_count = 0
 
     try:
         while True:
+            # In 'f' mode with web control, wait here until phone taps Start (or Break pauses it)
+            if full_cleaning and wait_for_web_start and not web_start_event.is_set():
+                if brush_running:
+                    send_command(ser, "M20 0")
+                    brush_running = False
+                    print("[FULL MODE - PAUSED] Brush STOPPED (M20 0)")
+
+                print("\n[FULL MODE STANDBY] Waiting for Web 'Start' button on port 5000 (Ctrl+C for terminal menu)...")
+                while not web_start_event.is_set():
+                    time.sleep(0.15)
+
+                # Reset corner/cycle state cleanly when starting a fresh run from Web
+                blind_approach_steps = 0
+                front_guide_steps = 0
+                corner_state = "NORMAL"
+                corner_rotate_steps = 0
+                normal_move_counter = 0
+                print("\n[FULL MODE STARTED] Web Start triggered -> Engaging brush & auto clean!")
+
+            # Start brush immediately in 'f' mode with 120 -> 50 PWM kickstart
+            if full_cleaning and not brush_running:
+                start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
+                brush_running = True
+                print(f"[FULL MODE] Brush ON (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
+
             step_count += 1
             print(f"\n>>> [AUTO CYCLE {step_count}] <<<")
 
@@ -972,6 +994,10 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
             outputImage(traced_img, img_path)
             prev_corner_state = corner_state
             cmd, should_stop = decide_movement(telem)
+
+            # Check if Web pressed Break/Stop while vision was processing
+            if full_cleaning and wait_for_web_start and not web_start_event.is_set():
+                continue
 
             # Full Cleaning Mode: Stop brush during corner turns, resume with kickstart after clearing corner
             if full_cleaning:
@@ -1044,11 +1070,16 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
 
             if should_stop:
                 print(f"[AUTO COMPLETE] Stop condition reached after {step_count} cycle(s).")
+                if full_cleaning and wait_for_web_start:
+                    # Return to Web standby instead of dropping out of 'f' mode
+                    web_start_event.clear()
+                    continue
                 break
 
     except KeyboardInterrupt:
-        print("\n[AUTO ABORTED] Stopped manually via Ctrl+C.")
+        print("\n[AUTO ABORTED] Ctrl+C pressed — returning to main command menu.")
     finally:
+        web_start_event.clear()
         # Always guarantee brush turns off when leaving 'f' mode
         if full_cleaning and brush_running:
             print("[FULL MODE] Stopping brush on exit (M20 0)...")
@@ -1062,7 +1093,7 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
 
 
 # ==========================================================
-# MOBILE / WEB CONTROL BRIDGE (PORT 5000)
+# ALWAYS-ON MOBILE / WEB CONTROL BRIDGE (PORT 5000)
 # ==========================================================
 def mobileControl(ser):
     """Starts background HTTP listener on port 5000 for Node.js / Web commands."""
@@ -1075,11 +1106,20 @@ def mobileControl(ser):
                 return
 
             params = parse_qs(parsed.query)
-            cmd = params.get("c", [""])[0].strip()
+            cmd = params.get("c", [""])[0].strip().upper()
 
             if cmd:
                 print(f"\n[WEB CMD] -> {cmd}")
-                send_command(ser, cmd.upper())
+                # Start / Break triggers from the phone controller
+                if cmd in ("START", "F", "A", "M20 100"):
+                    web_start_event.set()
+                elif cmd in ("STOP", "BREAK", "PAUSE", "M0 0"):
+                    web_start_event.clear()
+                    send_command(ser, "M0 0")
+                    send_command(ser, "M20 0")
+                else:
+                    # Direct manual control commands (M1, M2, M3, M4, M20, M30, etc.)
+                    send_command(ser, cmd)
 
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1098,7 +1138,7 @@ def mobileControl(ser):
 
 
 # ==========================================================
-# DIRECT SERIAL TERMINAL MODE ('t' MODE + WEB)
+# DIRECT SERIAL TERMINAL MODE ('t' MODE)
 # ==========================================================
 def direct_serial_mode(ser):
     print("\n==========================================")
@@ -1107,15 +1147,11 @@ def direct_serial_mode(ser):
     print("Type 'q' to return to main menu.")
     print("==========================================")
 
-    web_server = mobileControl(ser)
-
     while True:
         raw_cmd = input("\n[Direct Serial] > ").strip()
         if not raw_cmd:
             continue
         if raw_cmd.lower() == 'q':
-            web_server.shutdown()
-            web_server.server_close()
             print("Exiting Direct Terminal Mode.")
             break
 
@@ -1135,13 +1171,26 @@ def main_loop():
         return
     ser = connect_port()
 
+    # Keep Web bridge running continuously on port 5000 for phone control
+    web_server = mobileControl(ser)
+
+    # Boot directly into 'f' mode armed & waiting for Web 'Start' button
+    web_start_event.clear()
+    auto_drive_step_by_step(ser, full_cleaning=True, wait_for_web_start=True)
+
     while True:
-        cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 'f': full clean mode, 't': direct serial terminal, 'n': exit): ").strip().lower()
+        try:
+            cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 'f': full clean mode [web wait], 't': direct serial terminal, 'n': exit): ").strip().lower()
+        except KeyboardInterrupt:
+            print("\nType 'n' to exit cleanly.")
+            continue
 
         if cmd == 'n':
             captureImg.cam_ready = False
             if captureImg.cap is not None:
                 captureImg.cap.release()
+            web_server.shutdown()
+            web_server.server_close()
             print("Terminating tracker.")
             if ser and ser.is_open:
                 ser.close()
@@ -1169,9 +1218,10 @@ def main_loop():
                 decision, _ = decide_movement(telem)
                 print(f"[AI ONLY - NO MOVE] Planned command: {decision}")
         elif cmd == 'a':
-            auto_drive_step_by_step(ser, full_cleaning=False)
+            auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False)
         elif cmd == 'f':
-            auto_drive_step_by_step(ser, full_cleaning=True)
+            web_start_event.clear()
+            auto_drive_step_by_step(ser, full_cleaning=True, wait_for_web_start=True)
         elif cmd == 't':
             direct_serial_mode(ser)
         else:
