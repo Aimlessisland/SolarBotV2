@@ -911,7 +911,7 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
     corner_state = "NORMAL"
     corner_rotate_steps = 0
 
-    BRUSH_CRUISE_PWM = 100
+    BRUSH_CRUISE_PWM = 50
     PUMP_DURATION_MS = 1500
     PUMP_EVERY_N_MOVES = 4
 
