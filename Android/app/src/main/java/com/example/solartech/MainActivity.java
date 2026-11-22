@@ -44,14 +44,12 @@ public class MainActivity extends AppCompatActivity {
 
         prefs = getSharedPreferences("SolarTechPrefs", MODE_PRIVATE);
 
-        // First time launch check: auto-detect connected Wi-Fi gateway IP if possible
-        if (!prefs.contains(PREF_IP)) {
-            String detectedIp = getConnectedWifiGatewayIp();
-            if (detectedIp != null && !detectedIp.isEmpty() && !detectedIp.equals("0.0.0.0")) {
-                prefs.edit().putString(PREF_IP, detectedIp).apply();
-            } else {
-                prefs.edit().putString(PREF_IP, DEFAULT_IP).apply();
-            }
+        // Auto-detect connected Wi-Fi gateway IP right away on startup (perfect for device hotspots)
+        String detectedIp = getConnectedWifiGatewayIp();
+        if (detectedIp != null && !detectedIp.isEmpty() && !detectedIp.equals("0.0.0.0")) {
+            prefs.edit().putString(PREF_IP, detectedIp).apply();
+        } else if (!prefs.contains(PREF_IP)) {
+            prefs.edit().putString(PREF_IP, DEFAULT_IP).apply();
         }
 
         splashContainer = findViewById(R.id.splashContainer);
