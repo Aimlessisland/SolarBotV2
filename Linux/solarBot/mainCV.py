@@ -788,6 +788,7 @@ def ticks_to_cm(motor_cmd: str, ticks: int) -> float:
     ramped_cm = [table[t] for t in ramped_ticks]
     return round(float(np.interp(ticks, ramped_ticks, ramped_cm)), 2)
 
+
 def write_map_files_worker(path_points, corner_vertices):
     """Background daemon writer saving a human-readable ASCII + JSON text map."""
     try:
@@ -899,15 +900,23 @@ def save_explored_map_async(path_points, corner_vertices):
         daemon=True,
     ).start()
 
+
 # ==========================================================
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
-def auto_drive_step_by_step(ser):
+def auto_drive_step_by_step(ser, full_cleaning=False):
     global blind_approach_steps, front_guide_steps, corner_state, corner_rotate_steps
     blind_approach_steps = 0
     front_guide_steps = 0
     corner_state = "NORMAL"
     corner_rotate_steps = 0
+
+    BRUSH_CRUISE_PWM = 100
+    PUMP_DURATION_MS = 1500
+    PUMP_EVERY_N_MOVES = 4
+
+    brush_running = False
+    normal_move_counter = 0
 
     CARDINAL_VECTORS = [
         ("NORTH", 0.0, 1.0),
@@ -922,11 +931,18 @@ def auto_drive_step_by_step(ser):
     corner_vertices = []
     total_forward_moves = 0
 
+    mode_banner = "FULL CLEANING MODE ('f': BRUSH PWM 100 + PUMP 1500ms/4 MOVES)" if full_cleaning else "CONTINUOUS AUTO DRIVE MODE ('a')"
     print("\n==========================================")
-    print(">>> CONTINUOUS AUTO DRIVE MODE ACTIVE <<<")
+    print(f">>> {mode_banner} <<<")
     print("Background perimeter mapper ON (Starts at 0,0 facing NORTH)")
     print("Running until edge/stop condition (Press Ctrl+C to abort)")
     print("==========================================")
+
+    # Start brush immediately in 'f' mode
+    if full_cleaning:
+        send_command(ser, f"M20 {BRUSH_CRUISE_PWM}")
+        brush_running = True
+        print(f"[FULL MODE] Brush ON (M20 {BRUSH_CRUISE_PWM})")
 
     step_count = 0
 
@@ -946,6 +962,17 @@ def auto_drive_step_by_step(ser):
             prev_corner_state = corner_state
             cmd, should_stop = decide_movement(telem)
 
+            # Full Cleaning Mode: Stop brush during corner turns, resume after taking off corner
+            if full_cleaning:
+                if corner_state in ("CORNER_BACKUP", "CORNER_ROTATE") and brush_running:
+                    send_command(ser, "M20 0")
+                    brush_running = False
+                    print("[FULL MODE] Corner turn active -> Brush STOPPED (M20 0)")
+                elif corner_state == "NORMAL" and not brush_running and not should_stop:
+                    send_command(ser, f"M20 {BRUSH_CRUISE_PWM}")
+                    brush_running = True
+                    print(f"[FULL MODE] Corner cleared -> Brush RESUMED (M20 {BRUSH_CRUISE_PWM})")
+
             # Fire-and-forget corner tracker (wrapped so it can never interrupt driving)
             if mapping_active:
                 try:
@@ -960,6 +987,14 @@ def auto_drive_step_by_step(ser):
                     print(f"[MAPPER WARNING] Corner tracking skipped: {e}")
 
             if cmd is not None:
+                # Full Cleaning Mode: Spray water 1500ms once every 4 straight/lane movements
+                if full_cleaning and corner_state == "NORMAL":
+                    normal_move_counter += 1
+                    if normal_move_counter >= PUMP_EVERY_N_MOVES:
+                        print(f"[FULL MODE] {normal_move_counter} moves reached -> Spraying water (M30 {PUMP_DURATION_MS})")
+                        send_command(ser, f"M30 {PUMP_DURATION_MS}")
+                        normal_move_counter = 0
+
                 send_command(ser, cmd)
 
                 # Fire-and-forget distance counter (wrapped so it can never interrupt driving)
@@ -985,7 +1020,7 @@ def auto_drive_step_by_step(ser):
                                 f"-> Pos=({x_cm:.1f}, {y_cm:.1f}) cm | DistToStart={dist_to_origin:.1f} cm"
                             )
 
-                            # Once 4 corners done and back near (0,0), save in background & turn mapper off
+                            # Once 3 corners done (heading WEST on Edge 4) and back near (0,0), save & stop mapper
                             if len(corner_vertices) >= 3 and dir_idx == 3 and total_forward_moves >= 8:
                                 if dist_to_origin <= 30.0 or x_cm <= 15.0:
                                     corner_vertices.append((round(x_cm, 1), round(y_cm, 1)))
@@ -1003,6 +1038,11 @@ def auto_drive_step_by_step(ser):
     except KeyboardInterrupt:
         print("\n[AUTO ABORTED] Stopped manually via Ctrl+C.")
     finally:
+        # Always guarantee brush turns off when leaving 'f' mode
+        if full_cleaning and brush_running:
+            print("[FULL MODE] Stopping brush on exit (M20 0)...")
+            send_command(ser, "M20 0")
+
         if mapping_active and len(path_points) >= 5:
             print("[MAPPER] Saving partial perimeter map in background before exit...")
             write_map_files_worker(path_points, corner_vertices)
@@ -1083,7 +1123,7 @@ def main_loop():
     captureImg.init_camera()
 
     while True:
-        cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 't': direct serial terminal, 'n': exit): ").strip().lower()
+        cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 'f': full clean mode, 't': direct serial terminal, 'n': exit): ").strip().lower()
 
         if cmd == 'n':
             captureImg.cam_ready = False
@@ -1112,11 +1152,13 @@ def main_loop():
                 decision, _ = decide_movement(telem)
                 print(f"[AI ONLY - NO MOVE] Planned command: {decision}")
         elif cmd == 'a':
-            auto_drive_step_by_step(ser)
+            auto_drive_step_by_step(ser, full_cleaning=False)
+        elif cmd == 'f':
+            auto_drive_step_by_step(ser, full_cleaning=True)
         elif cmd == 't':
             direct_serial_mode(ser)
         else:
-            print("Invalid input. Type 'y', 'c', 'a', 't', or 'n'.")
+            print("Invalid input. Type 'y', 'c', 'a', 'f', 't', or 'n'.")
 
 
 if __name__ == "__main__":
