@@ -904,8 +904,8 @@ def save_explored_map_async(path_points, corner_vertices):
     ).start()
 
 
-def start_brush_with_kick(ser, kick_pwm=120, cruise_pwm=50, kick_sec=0.15):
-    """Overcomes static gearbox friction with a brief 120 PWM burst before dropping to 50 PWM."""
+def start_brush_with_kick(ser, kick_pwm=120, cruise_pwm=50, kick_sec=0.04):
+    """Sends a quick 40ms 120 PWM torque kick to break friction, then drops immediately to 50 PWM."""
     send_command(ser, f"M20 {kick_pwm}")
     time.sleep(kick_sec)
     send_command(ser, f"M20 {cruise_pwm}")
@@ -923,7 +923,7 @@ def auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False):
 
     BRUSH_KICK_PWM = 120
     BRUSH_CRUISE_PWM = 50
-    BRUSH_KICK_SEC = 0.15
+    BRUSH_KICK_SEC = 0.04
     PUMP_DURATION_MS = 1500
     PUMP_EVERY_N_MOVES = 4
 
