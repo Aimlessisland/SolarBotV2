@@ -4,7 +4,7 @@ import time
 import threading
 import cv2
 
-CAMERA_SOURCE = "/dev/video2"
+CAMERA_SOURCE = None  # Auto-detected at startup (checks /dev/v4l/by-id & /dev/video0..5)
 DIR_PATH = "imgForward"
 
 # Desired resolution
@@ -26,6 +26,32 @@ exposure = 350
 
 def test():
     print("Call capture Work!")
+
+
+def find_working_camera():
+    """Auto-detects the active USB video capture stream across /dev/v4l/by-id and /dev/video0..5."""
+    by_id_paths = sorted(glob.glob("/dev/v4l/by-id/*video-index0"))
+    candidates = by_id_paths + [f"/dev/video{i}" for i in range(6)]
+
+    seen_realpaths = set()
+    for source in candidates:
+        if not os.path.exists(source):
+            continue
+        real_dev = os.path.realpath(source)
+        if real_dev in seen_realpaths:
+            continue
+        seen_realpaths.add(real_dev)
+
+        test_cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+        if test_cap.isOpened():
+            test_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            ret, frame = test_cap.read()
+            if ret and frame is not None and frame.size > 0:
+                print(f"[CAMERA AUTO-FOUND] {source} -> {real_dev}")
+                return test_cap, source
+        test_cap.release()
+
+    return None, None
 
 
 def grab_loop():
@@ -56,15 +82,17 @@ def grab_loop():
 
 
 def init_camera():
-    """Opens and configures V4L2 camera once, then starts background reader."""
-    global cap, latest_frame, cam_ready, exposure
+    """Auto-finds and configures V4L2 camera once, then starts background reader."""
+    global cap, latest_frame, cam_ready, exposure, CAMERA_SOURCE
     if cam_ready and cap is not None and cap.isOpened():
         return True
 
-    cap = cv2.VideoCapture(CAMERA_SOURCE, cv2.CAP_V4L2)
-    if not cap.isOpened():
-        print(f"Error: Could not open camera: {CAMERA_SOURCE}")
+    cap, detected_source = find_working_camera()
+    if cap is None:
+        print("Error: Could not find any working USB camera on /dev/v4l/by-id or /dev/video0..5")
         return False
+
+    CAMERA_SOURCE = detected_source
 
     # 1. Force MJPG BEFORE resolution so 1080p runs at 30 FPS
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -86,7 +114,7 @@ def init_camera():
 
     cam_ready = True
     threading.Thread(target=grab_loop, daemon=True).start()
-    print(f"[CAMERA READY] {CAMERA_SOURCE} locked open & streaming in background.")
+    print(f"[CAMERA READY] {CAMERA_SOURCE} locked open & streaming 1920x1080 in background.")
     return True
 
 

@@ -931,7 +931,7 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
     corner_vertices = []
     total_forward_moves = 0
 
-    mode_banner = "FULL CLEANING MODE ('f': BRUSH PWM 100 + PUMP 1500ms/4 MOVES)" if full_cleaning else "CONTINUOUS AUTO DRIVE MODE ('a')"
+    mode_banner = f"FULL CLEANING MODE ('f': BRUSH PWM {BRUSH_CRUISE_PWM} + PUMP 1500ms/4 MOVES)" if full_cleaning else "CONTINUOUS AUTO DRIVE MODE ('a')"
     print("\n==========================================")
     print(f">>> {mode_banner} <<<")
     print("Background perimeter mapper ON (Starts at 0,0 facing NORTH)")
@@ -951,7 +951,9 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
             step_count += 1
             print(f"\n>>> [AUTO CYCLE {step_count}] <<<")
 
-            captureImg.capture_image()
+            if captureImg.capture_image() is None:
+                print("[STOP] Camera disconnected or failed to capture — aborting auto drive.")
+                break
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is None:
@@ -1119,8 +1121,10 @@ def direct_serial_mode(ser):
 def main_loop():
     os.makedirs(FORWARD_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if not captureImg.init_camera():
+        print("[FATAL] No camera detected! Plug in the camera and restart.")
+        return
     ser = connect_port()
-    captureImg.init_camera()
 
     while True:
         cmd = input("\nEnter command ('y': snap+move, 'c': capture+AI only, 'a': continuous auto drive, 'f': full clean mode, 't': direct serial terminal, 'n': exit): ").strip().lower()
@@ -1135,7 +1139,9 @@ def main_loop():
                 print("Serial port closed.")
             break
         elif cmd == 'y':
-            captureImg.capture_image()
+            if captureImg.capture_image() is None:
+                print("[ABORT] Camera failed — not moving.")
+                continue
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
@@ -1144,7 +1150,9 @@ def main_loop():
                 if decision is not None:
                     send_command(ser, decision)
         elif cmd == 'c':
-            captureImg.capture_image()
+            if captureImg.capture_image() is None:
+                print("[ABORT] Camera failed.")
+                continue
 
             traced_img, img_path, telem = process_and_trace()
             if traced_img is not None:
