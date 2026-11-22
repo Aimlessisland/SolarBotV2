@@ -4,7 +4,7 @@ import time
 import threading
 import cv2
 
-CAMERA_SOURCE = "/dev/video0"
+CAMERA_SOURCE = "/dev/video2"
 DIR_PATH = "imgForward"
 
 # Desired resolution
