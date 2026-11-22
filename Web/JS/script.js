@@ -6,7 +6,7 @@
 const API_URL = `http://${window.location.hostname}:5000/cmd`;
 
 let pressedCmd = null;
-let isPowerOff = false; /* เพิ่ม -> เก็บสถานะล็อกปุ่มเดิน */
+let isPowerOff = true; /* เพิ่ม -> เก็บสถานะล็อกปุ่มเดิน */
 
 async function sendOnce(cmd) {
     try {
