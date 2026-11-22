@@ -1120,6 +1120,7 @@ def mobileControl(ser):
                 else:
                     # Direct manual control commands (M1, M2, M3, M4, M20, M30, etc.)
                     send_command(ser, cmd)
+                    captureImg.capture_image()
 
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", "*")
