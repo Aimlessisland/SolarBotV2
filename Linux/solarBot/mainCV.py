@@ -901,6 +901,13 @@ def save_explored_map_async(path_points, corner_vertices):
     ).start()
 
 
+def start_brush_with_kick(ser, kick_pwm=120, cruise_pwm=50, kick_sec=0.15):
+    """Overcomes static gearbox friction with a brief 120 PWM burst before dropping to 50 PWM."""
+    send_command(ser, f"M20 {kick_pwm}")
+    time.sleep(kick_sec)
+    send_command(ser, f"M20 {cruise_pwm}")
+
+
 # ==========================================================
 # CONTINUOUS AUTO DRIVE LOOP (RUNS UNTIL STOP CONDITION)
 # ==========================================================
@@ -911,7 +918,9 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
     corner_state = "NORMAL"
     corner_rotate_steps = 0
 
+    BRUSH_KICK_PWM = 120
     BRUSH_CRUISE_PWM = 50
+    BRUSH_KICK_SEC = 0.15
     PUMP_DURATION_MS = 1500
     PUMP_EVERY_N_MOVES = 4
 
@@ -931,18 +940,18 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
     corner_vertices = []
     total_forward_moves = 0
 
-    mode_banner = f"FULL CLEANING MODE ('f': BRUSH PWM {BRUSH_CRUISE_PWM} + PUMP 1500ms/4 MOVES)" if full_cleaning else "CONTINUOUS AUTO DRIVE MODE ('a')"
+    mode_banner = f"FULL CLEANING MODE ('f': BRUSH {BRUSH_KICK_PWM}->{BRUSH_CRUISE_PWM} PWM + PUMP 1500ms/4 MOVES)" if full_cleaning else "CONTINUOUS AUTO DRIVE MODE ('a')"
     print("\n==========================================")
     print(f">>> {mode_banner} <<<")
     print("Background perimeter mapper ON (Starts at 0,0 facing NORTH)")
     print("Running until edge/stop condition (Press Ctrl+C to abort)")
     print("==========================================")
 
-    # Start brush immediately in 'f' mode
+    # Start brush immediately in 'f' mode with 120 -> 50 PWM kickstart
     if full_cleaning:
-        send_command(ser, f"M20 {BRUSH_CRUISE_PWM}")
+        start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
         brush_running = True
-        print(f"[FULL MODE] Brush ON (M20 {BRUSH_CRUISE_PWM})")
+        print(f"[FULL MODE] Brush ON (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
 
     step_count = 0
 
@@ -964,16 +973,16 @@ def auto_drive_step_by_step(ser, full_cleaning=False):
             prev_corner_state = corner_state
             cmd, should_stop = decide_movement(telem)
 
-            # Full Cleaning Mode: Stop brush during corner turns, resume after taking off corner
+            # Full Cleaning Mode: Stop brush during corner turns, resume with kickstart after clearing corner
             if full_cleaning:
                 if corner_state in ("CORNER_BACKUP", "CORNER_ROTATE") and brush_running:
                     send_command(ser, "M20 0")
                     brush_running = False
                     print("[FULL MODE] Corner turn active -> Brush STOPPED (M20 0)")
                 elif corner_state == "NORMAL" and not brush_running and not should_stop:
-                    send_command(ser, f"M20 {BRUSH_CRUISE_PWM}")
+                    start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
                     brush_running = True
-                    print(f"[FULL MODE] Corner cleared -> Brush RESUMED (M20 {BRUSH_CRUISE_PWM})")
+                    print(f"[FULL MODE] Corner cleared -> Brush RESUMED (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
 
             # Fire-and-forget corner tracker (wrapped so it can never interrupt driving)
             if mapping_active:
