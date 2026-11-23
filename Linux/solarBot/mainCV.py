@@ -973,7 +973,7 @@ def auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False):
                 normal_move_counter = 0
                 print("\n[FULL MODE STARTED] Web Start triggered -> Engaging brush & auto clean!")
 
-            # Start brush immediately in 'f' mode with 120 -> 50 PWM kickstart
+            # Start brush once in 'f' mode with 120 -> 50 PWM kickstart and leave it running
             if full_cleaning and not brush_running:
                 start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
                 brush_running = True
@@ -998,18 +998,6 @@ def auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False):
             # Check if Web pressed Break/Stop while vision was processing
             if full_cleaning and wait_for_web_start and not web_start_event.is_set():
                 continue
-
-            # Full Cleaning Mode: Keep brush OFF during corner backup/rotate AND M3/M4 alignment;
-            # only resume once the turn is completely done and driving straight forward (M1)
-            if full_cleaning:
-                if (corner_state in ("CORNER_BACKUP", "CORNER_ROTATE") or (cmd is not None and not cmd.startswith("M1"))) and brush_running:
-                    send_command(ser, "M20 0")
-                    brush_running = False
-                    print("[FULL MODE] Turning/aligning -> Brush STOPPED (M20 0)")
-                elif corner_state == "NORMAL" and cmd is not None and cmd.startswith("M1") and not brush_running and not should_stop:
-                    start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
-                    brush_running = True
-                    print(f"[FULL MODE] Corner cleared -> Brush RESUMED (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
 
             # Fire-and-forget corner tracker (wrapped so it can never interrupt driving)
             if mapping_active:
