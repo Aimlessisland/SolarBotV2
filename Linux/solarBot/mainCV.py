@@ -999,13 +999,14 @@ def auto_drive_step_by_step(ser, full_cleaning=False, wait_for_web_start=False):
             if full_cleaning and wait_for_web_start and not web_start_event.is_set():
                 continue
 
-            # Full Cleaning Mode: Stop brush during corner turns, resume with kickstart after clearing corner
+            # Full Cleaning Mode: Keep brush OFF during corner backup/rotate AND M3/M4 alignment;
+            # only resume once the turn is completely done and driving straight forward (M1)
             if full_cleaning:
-                if corner_state in ("CORNER_BACKUP", "CORNER_ROTATE") and brush_running:
+                if (corner_state in ("CORNER_BACKUP", "CORNER_ROTATE") or (cmd is not None and not cmd.startswith("M1"))) and brush_running:
                     send_command(ser, "M20 0")
                     brush_running = False
-                    print("[FULL MODE] Corner turn active -> Brush STOPPED (M20 0)")
-                elif corner_state == "NORMAL" and not brush_running and not should_stop:
+                    print("[FULL MODE] Turning/aligning -> Brush STOPPED (M20 0)")
+                elif corner_state == "NORMAL" and cmd is not None and cmd.startswith("M1") and not brush_running and not should_stop:
                     start_brush_with_kick(ser, BRUSH_KICK_PWM, BRUSH_CRUISE_PWM, BRUSH_KICK_SEC)
                     brush_running = True
                     print(f"[FULL MODE] Corner cleared -> Brush RESUMED (Kick M20 {BRUSH_KICK_PWM} -> M20 {BRUSH_CRUISE_PWM})")
